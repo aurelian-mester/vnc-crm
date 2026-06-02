@@ -46,6 +46,7 @@ const ProductConfigurator: React.FC = () => {
   });
 
   const [result, setResult] = useState<PricingResult | null>(null);
+  const [margins, setMargins] = useState<any[]>([]);
   const [specs, setSpecs] = useState<SpecsResult | null>(null);
   const [loadingSpecs, setLoadingSpecs] = useState(false);
   const [activeTab, setActiveTab] = useState('3d');
@@ -108,9 +109,28 @@ const ProductConfigurator: React.FC = () => {
   };
 
   useEffect(() => {
+    const token = localStorage.getItem('vnc_token');
+    fetch('/vnc-crm/api/auth/margins', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+    .then(res => res.json())
+    .then(data => setMargins(data || []))
+    .catch(err => console.error('Failed to fetch margins config', err));
+  }, []);
+
+  useEffect(() => {
     calculatePrice();
     calculateSpecs();
   }, [params]);
+
+  const canSeeMargins = role === 'admin' || role === 'management' || role === 'sales_manager' || role === 'rsm' || role === 'asm' || role === 'sales' || role === 'ai';
+  const activeMarginConfig = margins.find(m => m.role === role) || { min_margin: 10.0, max_margin: 20.0 };
+  const minM = activeMarginConfig.min_margin;
+  const maxM = activeMarginConfig.max_margin;
+  const currentMargin = result && result.finalPrice > 0 ? ((result.finalPrice - result.totalCost * 0.7) / result.finalPrice * 100) : 0;
+  const isViolation = !!(result && canSeeMargins && (currentMargin < minM || currentMargin > maxM));
 
   return (
     <div className="card">
@@ -507,16 +527,16 @@ const ProductConfigurator: React.FC = () => {
                 <strong style={{ fontSize: '1.4rem', color: 'var(--primary-color)' }}>€{result.finalPrice.toFixed(2)}</strong>
               </div>
 
-              {/* Margins: visible to admin and sales */}
-              {(role === 'admin' || role === 'sales') && (
+              {/* Margins: visible to all sales/admin/management roles */}
+              {canSeeMargins && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #90caf9' }}>
                   <span style={{ fontSize: '0.9rem', color: 'var(--secondary-color)', fontWeight: 500 }}>
                     {role === 'admin' ? t('estimated_profit_margin') : t('sales_margin')}
                   </span>
-                  <strong style={{ fontSize: '1rem', color: 'var(--accent-color)' }}>
+                  <strong style={{ fontSize: '1rem', color: isViolation ? '#e74c3c' : 'var(--accent-color)', fontWeight: 'bold' }}>
                     {role === 'admin' 
-                      ? `€${(result.finalPrice - result.totalCost * 0.7).toFixed(2)} (${((result.finalPrice - result.totalCost * 0.7) / result.finalPrice * 100).toFixed(1)}%)`
-                      : `${((result.finalPrice - result.totalCost * 0.7) / result.finalPrice * 100).toFixed(1)}%`
+                      ? `€${(result.finalPrice - result.totalCost * 0.7).toFixed(2)} (${currentMargin.toFixed(1)}%)`
+                      : `${currentMargin.toFixed(1)}%`
                     }
                   </strong>
                 </div>
@@ -528,8 +548,38 @@ const ProductConfigurator: React.FC = () => {
             </div>
           )}
           
+          {isViolation && (
+            <div style={{
+              marginTop: '15px',
+              padding: '12px 15px',
+              backgroundColor: '#fde8e8',
+              border: '1px solid #f8b4b4',
+              borderRadius: '6px',
+              color: '#9b1c1c',
+              fontSize: '0.85rem',
+              fontWeight: 500
+            }}>
+              ⚠️ {t('sales_margin_violation', { 
+                min: minM.toFixed(1), 
+                max: maxM.toFixed(1), 
+                current: currentMargin.toFixed(1) 
+              })}
+            </div>
+          )}
+
           {role !== 'production' && (
-            <button className="btn-primary" style={{ width: '100%', marginTop: '20px' }}>{t('create_quote')}</button>
+            <button 
+              className="btn-primary" 
+              disabled={isViolation}
+              style={{ 
+                width: '100%', 
+                marginTop: '20px',
+                background: isViolation ? '#ccc' : 'linear-gradient(135deg, var(--kraft-accent) 0%, #a07850 100%)',
+                cursor: isViolation ? 'not-allowed' : 'pointer'
+              }}
+            >
+              {t('create_quote')}
+            </button>
           )}
         </div>
       </div>

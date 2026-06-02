@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useI18n } from '../i18n';
+import { parseJWT } from '../App';
 
 interface Customer {
   id: string;
@@ -42,12 +43,17 @@ interface QuoteModalProps {
 }
 
 const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId, onClose, onSave }) => {
+  const token = localStorage.getItem('vnc_token');
+  const user = token ? parseJWT(token) : null;
+  const role = user?.role || localStorage.getItem('vnc_role') || "viewer";
+
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [productsList, setProductsList] = useState<Product[]>([]);
   const [materialsList, setMaterialsList] = useState<Product[]>([]);
+  const [roleMargins, setRoleMargins] = useState<any[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState(preselectedCustomerId || '');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   
   const [items, setItems] = useState<QuoteItemInput[]>([
     {
@@ -172,6 +178,16 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
   useEffect(() => {
     setLoading(true);
     const token = localStorage.getItem('vnc_token');
+
+    // Fetch allowed role margins
+    fetch('/vnc-crm/api/auth/margins', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(res => res.json())
+      .then(marginsData => {
+        setRoleMargins(marginsData || []);
+      })
+      .catch(err => console.error('Failed to load margins list', err));
 
     // Fetch board grades
     fetch('/vnc-crm/api/products?category=board_grades', {
@@ -356,6 +372,65 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
   };
 
   // Calculations
+  const getItemProductionUnitCost = (it: QuoteItemInput) => {
+    if (it.product_type === 'standard') {
+      const prod = productsList.find(p => p.id === it.product_id);
+      if (prod) {
+        return prod.unit_cost || (it.unit_price * 0.7);
+      }
+      return it.unit_price * 0.7;
+    } else {
+      // Custom box
+      const length = it.length;
+      const width = it.width;
+      const height = it.height;
+      const quantity = it.quantity || 1;
+      const material = it.material;
+      const printing = it.printing;
+      const dieCutting = it.dieCutting;
+      const gluing = it.gluing;
+      const stapling = it.stapling;
+
+      const surfaceArea = 2.0 * (length * width + length * height + width * height) / 1000000.0;
+      
+      const mat = materialsList.find(m => m.id === material);
+      let materialPricePerSQM = mat ? mat.unit_price : 0.80;
+      if (!mat) {
+        switch (material) {
+          case 'Testliner': materialPricePerSQM = 0.80; break;
+          case 'Schrenz': materialPricePerSQM = 0.60; break;
+          case 'Wellenstoff': materialPricePerSQM = 0.70; break;
+          default: materialPricePerSQM = 0.80;
+        }
+      }
+
+      const basePrice = surfaceArea * materialPricePerSQM * quantity;
+      let operationPrice = 0.0;
+      if (printing) operationPrice += 0.10 * quantity;
+      if (dieCutting) operationPrice += 0.05 * quantity;
+      if (gluing) operationPrice += 0.03 * quantity;
+      if (stapling) operationPrice += 0.02 * quantity;
+
+      const totalPrice = basePrice + operationPrice;
+      const estProductionCost = totalPrice * 0.7;
+      return estProductionCost / quantity;
+    }
+  };
+
+  const activeMarginConfig = roleMargins.find(m => m.role === role) || { min_margin: 10.0, max_margin: 20.0 };
+  const minM = activeMarginConfig.min_margin;
+  const maxM = activeMarginConfig.max_margin;
+
+  const violatingItems = items.map((it, index) => {
+    if (it.unit_price <= 0) return null;
+    const cost = getItemProductionUnitCost(it);
+    const margin = ((it.unit_price - cost) / it.unit_price) * 100;
+    const isViolated = margin < minM || margin > maxM;
+    return isViolated ? { index, margin, description: it.description || `${t('custom_packaging_box')} (${it.length}x${it.width}x${it.height})` } : null;
+  }).filter(v => v !== null) as { index: number; margin: number; description: string }[];
+
+  const isQuoteViolated = violatingItems.length > 0;
+
   const subtotal = items.reduce((acc, it) => acc + (it.quantity * it.unit_price), 0);
   const discountAmount = subtotal * (discount / 100);
   const total = subtotal - discountAmount;
@@ -585,6 +660,16 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
                     <span style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--secondary-color)', display: 'block', marginTop: '10px' }}>
                       {new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(it.quantity * it.unit_price)}
                     </span>
+                    {it.unit_price > 0 && (() => {
+                      const cost = getItemProductionUnitCost(it);
+                      const margin = ((it.unit_price - cost) / it.unit_price) * 100;
+                      const isItemViolated = margin < minM || margin > maxM;
+                      return (
+                        <div style={{ fontSize: '0.78rem', color: isItemViolated ? '#ff4d4f' : '#2ecc71', fontWeight: 'bold', marginTop: '4px' }}>
+                          {t('sales_margin')}: {margin.toFixed(1)}%
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -747,11 +832,49 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
           </div>
 
           {/* Submission Buttons */}
+          {isQuoteViolated && (
+            <div style={{
+              margin: '20px 0 0 0',
+              padding: '15px 20px',
+              backgroundColor: '#fde8e8',
+              border: '1px solid #f8b4b4',
+              borderRadius: '8px',
+              color: '#9b1c1c',
+              fontSize: '0.9rem',
+              fontWeight: 500
+            }}>
+              <div style={{ fontWeight: 'bold', marginBottom: '8px' }}>⚠️ {t('sales_margin_violation_title')}</div>
+              <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                {violatingItems.map(vi => (
+                  <li key={vi.index}>
+                    {t('sales_margin_violation_item', { 
+                      item: vi.description, 
+                      margin: vi.margin.toFixed(1),
+                      min: minM.toFixed(1),
+                      max: maxM.toFixed(1)
+                    })}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '15px', marginTop: '35px' }}>
             <button type="button" onClick={onClose} className="btn-primary" style={{ background: 'none', border: '1px solid var(--border-color)', color: 'var(--text-muted)', boxShadow: 'none' }}>
               {t('cancel')}
             </button>
-            <button type="submit" className="btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button 
+              type="submit" 
+              className="btn-primary" 
+              disabled={submitting || isQuoteViolated} 
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '8px',
+                background: isQuoteViolated ? '#ccc' : 'linear-gradient(135deg, var(--kraft-accent) 0%, #a07850 100%)',
+                cursor: isQuoteViolated ? 'not-allowed' : 'pointer'
+              }}
+            >
               {submitting ? t('saving_offer') : (quoteId ? t('save_changes') : t('save_offer'))}
             </button>
           </div>

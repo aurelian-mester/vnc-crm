@@ -356,7 +356,7 @@ func handleGetQuotes(w http.ResponseWriter, r *http.Request) {
 		}
 		query += " WHERE q.customer_id = $1"
 		args = append(args, customerID)
-	} else if role != "admin" && role != "viewer" && role != "production" && salesCode != "" {
+	} else if role != "admin" && role != "viewer" && role != "production" && role != "management" && salesCode != "" {
 		query += " WHERE q.salesperson_code = $1"
 		args = append(args, salesCode)
 	}
@@ -440,7 +440,7 @@ func handleGetQuoteDetails(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Sales agents can only view their assigned quotes
-	if role != "admin" && role != "viewer" && role != "production" && role != "external" && salespersonCode != "" && q.SalespersonCode != salespersonCode {
+	if role != "admin" && role != "viewer" && role != "production" && role != "management" && role != "external" && salespersonCode != "" && q.SalespersonCode != salespersonCode {
 		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
@@ -466,6 +466,125 @@ func handleGetQuoteDetails(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(q)
 }
 
+func validateQuoteMargins(role string, items []QuoteItem) error {
+	if db == nil || productsDB == nil {
+		return nil // skip validation if databases are unavailable
+	}
+
+	var minMargin, maxMargin float64
+	err := db.QueryRow("SELECT min_margin, max_margin FROM role_margins WHERE role = $1", role).Scan(&minMargin, &maxMargin)
+	if err == sql.ErrNoRows {
+		// Default fallback
+		minMargin, maxMargin = 10.0, 20.0
+		if role == "admin" || role == "management" {
+			minMargin, maxMargin = -100.0, 100.0
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to fetch role margin limits: %v", err)
+	}
+
+	// Skip validation for admin/management if they have unlimited range
+	if minMargin <= -99.9 && maxMargin >= 99.9 {
+		return nil
+	}
+
+	for _, item := range items {
+		var length, width, height float64
+		var quantity int
+		var material string
+		var printing, dieCutting, gluing, stapling bool
+
+		// Check if config_params is populated
+		if item.ConfigParams != "" {
+			var params struct {
+				Length     float64 `json:"length"`
+				Width      float64 `json:"width"`
+				Height     float64 `json:"height"`
+				Quantity   int     `json:"quantity"`
+				Material   string  `json:"material"`
+				Printing   bool    `json:"printing"`
+				DieCutting bool    `json:"dieCutting"`
+				Gluing     bool    `json:"gluing"`
+				Stapling   bool    `json:"stapling"`
+			}
+			if err := json.Unmarshal([]byte(item.ConfigParams), &params); err == nil {
+				length = params.Length
+				width = params.Width
+				height = params.Height
+				quantity = params.Quantity
+				material = params.Material
+				printing = params.Printing
+				dieCutting = params.DieCutting
+				gluing = params.Gluing
+				stapling = params.Stapling
+			}
+		}
+
+		if quantity <= 0 {
+			quantity = item.Quantity
+		}
+		if quantity <= 0 {
+			quantity = 1
+		}
+
+		var unitCost float64
+		isStandard := length == 0 && width == 0 && height == 0
+
+		if isStandard {
+			prodID := item.ProductID
+			if prodID == "" {
+				prodID = material
+			}
+			err := productsDB.QueryRow("SELECT unit_cost FROM products WHERE id = $1", prodID).Scan(&unitCost)
+			if err != nil {
+				// Fallback to unit cost if not found in db
+				unitCost = item.UnitPrice * 0.7
+			}
+		} else {
+			// Custom box pricing cost logic
+			surfaceArea := 2.0 * (length*width + length*height + width*height) / 1000000.0
+			
+			var materialPricePerSQM float64
+			err := productsDB.QueryRow("SELECT unit_price FROM products WHERE id = $1", material).Scan(&materialPricePerSQM)
+			if err != nil {
+				switch material {
+				case "Testliner":
+					materialPricePerSQM = 0.80
+				case "Schrenz":
+					materialPricePerSQM = 0.60
+				case "Wellenstoff":
+					materialPricePerSQM = 0.70
+				default:
+					materialPricePerSQM = 0.80
+				}
+			}
+
+			basePrice := surfaceArea * materialPricePerSQM * float64(quantity)
+			operationPrice := 0.0
+			if printing { operationPrice += 0.10 * float64(quantity) }
+			if dieCutting { operationPrice += 0.05 * float64(quantity) }
+			if gluing { operationPrice += 0.03 * float64(quantity) }
+			if stapling { operationPrice += 0.02 * float64(quantity) }
+
+			totalPrice := basePrice + operationPrice
+			estProductionCost := totalPrice * 0.7
+			unitCost = estProductionCost / float64(quantity)
+		}
+
+		if item.UnitPrice <= 0 {
+			continue // skip empty items
+		}
+
+		margin := ((item.UnitPrice - unitCost) / item.UnitPrice) * 100.0
+		if margin < minMargin || margin > maxMargin {
+			return fmt.Errorf("Sales margin violation for item '%s': role '%s' allowed range is %.1f%% to %.1f%%, item margin is %.1f%% (price: %.4f, production cost: %.4f)",
+				item.Description, role, minMargin, maxMargin, margin, item.UnitPrice, unitCost)
+		}
+	}
+
+	return nil
+}
+
 func handleCreateQuote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	claims, err := claimsFromToken(r)
@@ -483,13 +602,18 @@ func handleCreateQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateQuoteMargins(role, req.Items); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	if req.CustomerID == "" {
 		http.Error(w, "customer_id is required", http.StatusBadRequest)
 		return
 	}
 
 	// Auto-assign salesperson code if user is sales
-	if role != "admin" && salesCode != "" {
+	if role != "admin" && role != "management" && salesCode != "" {
 		req.SalespersonCode = salesCode
 	} else if req.SalespersonCode == "" {
 		req.SalespersonCode = "AM" // Fallback administrator
@@ -561,6 +685,16 @@ func handleCreateQuote(w http.ResponseWriter, r *http.Request) {
 
 func handleUpdateQuote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	role := claims["role"].(string)
+	salespersonCode, _ := claims["salesperson_code"].(string)
+	customerID, _ := claims["customer_id"].(string)
+
 	vars := mux.Vars(r)
 	quoteID, err := strconv.Atoi(vars["id"])
 	if err != nil {
@@ -577,6 +711,36 @@ func handleUpdateQuote(w http.ResponseWriter, r *http.Request) {
 	if db == nil {
 		http.Error(w, "Database unavailable", http.StatusInternalServerError)
 		return
+	}
+
+	// Fetch existing quote to check owner
+	var existingSalesCode, existingCustomerID string
+	err = db.QueryRow("SELECT salesperson_code, customer_id FROM quotes WHERE id = $1", quoteID).Scan(&existingSalesCode, &existingCustomerID)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Quote not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Security validation: external users can only update their own quotes
+	if role == "external" && existingCustomerID != customerID {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	// Sales agents can only update their assigned quotes (unless admin, viewer, production, or management)
+	if role != "admin" && role != "viewer" && role != "production" && role != "management" && role != "external" && salespersonCode != "" && existingSalesCode != salespersonCode {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	// Validate margins if updating items
+	if len(req.Items) > 0 {
+		if err := validateQuoteMargins(role, req.Items); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	tx, err := db.Begin()

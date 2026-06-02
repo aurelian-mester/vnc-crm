@@ -150,6 +150,37 @@ func initDB() {
 		// Run migrations
 		_, _ = db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS locale VARCHAR(10) DEFAULT 'en';")
 
+		// Create role_margins table
+		_, err = db.Exec(`
+			CREATE TABLE IF NOT EXISTS role_margins (
+				role VARCHAR(50) PRIMARY KEY,
+				min_margin NUMERIC(5, 2) NOT NULL,
+				max_margin NUMERIC(5, 2) NOT NULL,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			);
+		`)
+		if err != nil {
+			log.Printf("Error creating role_margins table: %v", err)
+		} else {
+			// Seed default values
+			_, err = db.Exec(`
+				INSERT INTO role_margins (role, min_margin, max_margin) VALUES
+				('admin', -100.0, 100.0),
+				('management', -100.0, 100.0),
+				('sales_manager', 0.0, 20.0),
+				('rsm', 5.0, 20.0),
+				('asm', 10.0, 20.0),
+				('sales', 10.0, 20.0),
+				('ai', 10.0, 20.0),
+				('viewer', 0.0, 0.0),
+				('production', 0.0, 0.0)
+				ON CONFLICT (role) DO NOTHING;
+			`)
+			if err != nil {
+				log.Printf("Error seeding role_margins defaults: %v", err)
+			}
+		}
+
 		// Seed main administrator
 		adminEmail := "aurelian.mester@vrancart.com"
 		_, err = db.Exec(`
@@ -455,6 +486,8 @@ func main() {
 	r.HandleFunc("/auth/users/role", handleUpdateUserRole).Methods("PUT")
 	r.HandleFunc("/auth/users/settings", handleUpdateUserSettings).Methods("PUT")
 	r.HandleFunc("/auth/sync", handleSync).Methods("POST")
+	r.HandleFunc("/auth/margins", handleGetMargins).Methods("GET")
+	r.HandleFunc("/auth/margins", handleUpdateMargin).Methods("PUT")
 
 	log.Println("Auth Service starting on :8081...")
 	log.Fatal(http.ListenAndServe(":8081", r))
@@ -709,7 +742,10 @@ func handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validRoles := map[string]bool{"admin": true, "sales": true, "production": true, "viewer": true}
+	validRoles := map[string]bool{
+		"admin": true, "sales": true, "production": true, "viewer": true,
+		"asm": true, "ai": true, "rsm": true, "sales_manager": true, "management": true,
+	}
 	if !validRoles[req.Role] {
 		http.Error(w, "Invalid role value", http.StatusBadRequest)
 		return
@@ -1412,4 +1448,86 @@ func generateState() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
+}
+
+type RoleMargin struct {
+	Role      string    `json:"role"`
+	MinMargin float64   `json:"min_margin"`
+	MaxMargin float64   `json:"max_margin"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func handleGetMargins(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	if db == nil {
+		http.Error(w, "Database connection unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := db.Query("SELECT role, min_margin, max_margin, updated_at FROM role_margins ORDER BY role")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var margins []RoleMargin
+	for rows.Next() {
+		var m RoleMargin
+		if err := rows.Scan(&m.Role, &m.MinMargin, &m.MaxMargin, &m.UpdatedAt); err == nil {
+			margins = append(margins, m)
+		}
+	}
+	if margins == nil {
+		margins = []RoleMargin{}
+	}
+	json.NewEncoder(w).Encode(margins)
+}
+
+func handleUpdateMargin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	if claims["role"] != "admin" {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		Role      string  `json:"role"`
+		MinMargin float64 `json:"min_margin"`
+		MaxMargin float64 `json:"max_margin"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if req.Role == "" {
+		http.Error(w, "Role is required", http.StatusBadRequest)
+		return
+	}
+
+	if db == nil {
+		http.Error(w, "Database connection unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = db.Exec("UPDATE role_margins SET min_margin = $1, max_margin = $2, updated_at = CURRENT_TIMESTAMP WHERE role = $3", req.MinMargin, req.MaxMargin, req.Role)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Write([]byte(`{"status":"success"}`))
 }

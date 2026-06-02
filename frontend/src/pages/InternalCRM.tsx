@@ -40,7 +40,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="dashboard" 
           element={
-            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'internal']}>
+            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'internal', 'management', 'sales_manager', 'rsm', 'asm', 'ai']}>
               <Dashboard />
             </RoleGuard>
           } 
@@ -49,7 +49,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="customers" 
           element={
-            <RoleGuard allowedRoles={['admin', 'sales']}>
+            <RoleGuard allowedRoles={['admin', 'sales', 'asm', 'ai', 'rsm', 'sales_manager', 'management']}>
               <CustomersPage />
             </RoleGuard>
           } 
@@ -58,7 +58,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="configurator" 
           element={
-            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer']}>
+            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai']}>
               <ProductConfigurator />
             </RoleGuard>
           } 
@@ -67,7 +67,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="sales" 
           element={
-            <RoleGuard allowedRoles={['admin', 'sales']}>
+            <RoleGuard allowedRoles={['admin', 'sales', 'asm', 'ai', 'rsm', 'sales_manager', 'management']}>
               <SalesPage />
             </RoleGuard>
           } 
@@ -76,7 +76,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="production" 
           element={
-            <RoleGuard allowedRoles={['admin', 'production', 'sales', 'viewer']}>
+            <RoleGuard allowedRoles={['admin', 'production', 'sales', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai']}>
               <ProductionBoard />
             </RoleGuard>
           } 
@@ -85,7 +85,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="admin" 
           element={
-            <RoleGuard allowedRoles={['admin']}>
+            <RoleGuard allowedRoles={['admin', 'management', 'sales_manager', 'rsm']}>
               <AdminPage />
             </RoleGuard>
           } 
@@ -94,7 +94,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="leads" 
           element={
-            <RoleGuard allowedRoles={['admin', 'sales']}>
+            <RoleGuard allowedRoles={['admin', 'sales', 'asm', 'ai', 'rsm', 'sales_manager', 'management']}>
               <LeadsPage />
             </RoleGuard>
           } 
@@ -103,7 +103,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="opportunities" 
           element={
-            <RoleGuard allowedRoles={['admin', 'sales']}>
+            <RoleGuard allowedRoles={['admin', 'sales', 'asm', 'ai', 'rsm', 'sales_manager', 'management']}>
               <OpportunitiesPage />
             </RoleGuard>
           } 
@@ -112,7 +112,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="projects" 
           element={
-            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer']}>
+            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai']}>
               <ProjectsPage />
             </RoleGuard>
           } 
