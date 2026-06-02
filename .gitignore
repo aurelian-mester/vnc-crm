@@ -1,0 +1,32 @@
+# Dependencies
+frontend/node_modules/
+frontend/.pnp/
+frontend/.pnp.js
+
+# Testing
+frontend/coverage/
+
+# Production build outputs
+frontend/build/
+backend/api-gateway
+backend/auth-service
+backend/crm-service
+backend/pricing-service
+
+# Logs and archive files
+*.log
+backend/*.log
+*.txt
+*.tar.gz
+
+# Environment variables and secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db

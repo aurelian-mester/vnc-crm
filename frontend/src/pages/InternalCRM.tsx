@@ -1,0 +1,127 @@
+import React from 'react';
+import MainLayout from '../components/MainLayout';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import ProductConfigurator from './ProductConfigurator';
+import CustomersPage from './CustomersPage';
+import AdminPage from './AdminPage';
+import SalesPage from './SalesPage';
+import Dashboard from './Dashboard';
+import ProductionBoard from '../components/ProductionBoard';
+import LeadsPage from './LeadsPage';
+import OpportunitiesPage from './OpportunitiesPage';
+import ProjectsPage from './ProjectsPage';
+import { parseJWT } from '../App';
+
+
+
+// Route Guard Component for Role-Based Access Control
+const RoleGuard = ({ 
+  allowedRoles, 
+  children 
+}: { 
+  allowedRoles: string[]; 
+  children: React.ReactElement 
+}) => {
+  const token = localStorage.getItem('vnc_token');
+  const user = token ? parseJWT(token) : null;
+  const role = user?.role || localStorage.getItem('vnc_role') || "viewer";
+
+  if (!allowedRoles.includes(role)) {
+    return <Navigate to="/crm/dashboard" replace />;
+  }
+
+  return children;
+};
+
+const InternalCRM: React.FC = () => {
+  return (
+    <MainLayout title="Management System">
+      <Routes>
+        <Route 
+          path="dashboard" 
+          element={
+            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'internal']}>
+              <Dashboard />
+            </RoleGuard>
+          } 
+        />
+        
+        <Route 
+          path="customers" 
+          element={
+            <RoleGuard allowedRoles={['admin', 'sales']}>
+              <CustomersPage />
+            </RoleGuard>
+          } 
+        />
+        
+        <Route 
+          path="configurator" 
+          element={
+            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer']}>
+              <ProductConfigurator />
+            </RoleGuard>
+          } 
+        />
+        
+        <Route 
+          path="sales" 
+          element={
+            <RoleGuard allowedRoles={['admin', 'sales']}>
+              <SalesPage />
+            </RoleGuard>
+          } 
+        />
+        
+        <Route 
+          path="production" 
+          element={
+            <RoleGuard allowedRoles={['admin', 'production', 'sales', 'viewer']}>
+              <ProductionBoard />
+            </RoleGuard>
+          } 
+        />
+        
+        <Route 
+          path="admin" 
+          element={
+            <RoleGuard allowedRoles={['admin']}>
+              <AdminPage />
+            </RoleGuard>
+          } 
+        />
+        
+        <Route 
+          path="leads" 
+          element={
+            <RoleGuard allowedRoles={['admin', 'sales']}>
+              <LeadsPage />
+            </RoleGuard>
+          } 
+        />
+        
+        <Route 
+          path="opportunities" 
+          element={
+            <RoleGuard allowedRoles={['admin', 'sales']}>
+              <OpportunitiesPage />
+            </RoleGuard>
+          } 
+        />
+
+        <Route 
+          path="projects" 
+          element={
+            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer']}>
+              <ProjectsPage />
+            </RoleGuard>
+          } 
+        />
+
+        <Route path="/" element={<Navigate to="dashboard" replace />} />
+      </Routes>
+    </MainLayout>
+  );
+};
+
+export default InternalCRM;
