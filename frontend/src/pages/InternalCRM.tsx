@@ -10,6 +10,8 @@ import ProductionBoard from '../components/ProductionBoard';
 import LeadsPage from './LeadsPage';
 import OpportunitiesPage from './OpportunitiesPage';
 import ProjectsPage from './ProjectsPage';
+import ClaimsPage from './ClaimsPage';
+import TruckOptimizerPage from './TruckOptimizerPage';
 import { parseJWT } from '../App';
 
 
@@ -40,7 +42,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="dashboard" 
           element={
-            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'internal', 'management', 'sales_manager', 'rsm', 'asm', 'ai']}>
+            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'internal', 'management', 'sales_manager', 'rsm', 'asm', 'ai', 'quality']}>
               <Dashboard />
             </RoleGuard>
           } 
@@ -58,7 +60,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="configurator" 
           element={
-            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai']}>
+            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai', 'quality']}>
               <ProductConfigurator />
             </RoleGuard>
           } 
@@ -76,7 +78,7 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="production" 
           element={
-            <RoleGuard allowedRoles={['admin', 'production', 'sales', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai']}>
+            <RoleGuard allowedRoles={['admin', 'production', 'sales', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai', 'quality']}>
               <ProductionBoard />
             </RoleGuard>
           } 
@@ -112,8 +114,26 @@ const InternalCRM: React.FC = () => {
         <Route 
           path="projects" 
           element={
-            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai']}>
+            <RoleGuard allowedRoles={['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai', 'quality']}>
               <ProjectsPage />
+            </RoleGuard>
+          } 
+        />
+
+        <Route 
+          path="claims" 
+          element={
+            <RoleGuard allowedRoles={['admin', 'quality', 'management', 'sales']}>
+              <ClaimsPage />
+            </RoleGuard>
+          } 
+        />
+
+        <Route 
+          path="truck-optimizer" 
+          element={
+            <RoleGuard allowedRoles={['admin', 'quality', 'management', 'sales', 'production', 'sales_manager', 'rsm', 'asm', 'ai']}>
+              <TruckOptimizerPage />
             </RoleGuard>
           } 
         />

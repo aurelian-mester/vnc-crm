@@ -26,11 +26,15 @@ const AdminPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   
+  // Cobb state
+  const [cobbThreshold, setCobbThreshold] = useState<number>(150);
+  const [savingCobb, setSavingCobb] = useState(false);
+  
   const token = localStorage.getItem('vnc_token');
   const user = token ? parseJWT(token) : null;
   const role = user?.role || localStorage.getItem('vnc_role') || "viewer";
   
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
 
   const roleLabels: Record<string, string> = {
     'admin': t('role_admin'),
@@ -41,7 +45,8 @@ const AdminPage: React.FC = () => {
     'sales': t('role_sales'),
     'ai': t('role_ai'),
     'viewer': t('role_viewer'),
-    'production': t('role_production')
+    'production': t('role_production'),
+    'quality': t('quality')
   };
 
   const fetchUsers = async () => {
@@ -191,6 +196,41 @@ const AdminPage: React.FC = () => {
     }
   };
 
+  const fetchCobbThreshold = async () => {
+    try {
+      const res = await fetch('/vnc-crm/api/quality-config', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.cobb_threshold) {
+          setCobbThreshold(data.cobb_threshold);
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleUpdateCobbThreshold = async (val: number) => {
+    setCobbThreshold(val);
+    setSavingCobb(true);
+    try {
+      await fetch('/vnc-crm/api/quality-config', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ cobb_threshold: val })
+      });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSavingCobb(false);
+    }
+  };
+
   useEffect(() => {
     if (role === 'admin') {
       fetchUsers();
@@ -198,6 +238,9 @@ const AdminPage: React.FC = () => {
       setLoading(false);
     }
     fetchMargins();
+    if (role === 'admin' || role === 'management') {
+      fetchCobbThreshold();
+    }
   }, [role]);
 
   return (
@@ -366,6 +409,7 @@ const AdminPage: React.FC = () => {
                                   <option value="sales_manager">{t('role_sales_manager')}</option>
                                   <option value="management">{t('role_management')}</option>
                                   <option value="production">{t('role_production')}</option>
+                                  <option value="quality">{t('quality')}</option>
                                   <option value="admin">{t('role_admin')}</option>
                                 </select>
                                 
@@ -522,6 +566,36 @@ const AdminPage: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* Cobb Threshold Config Panel */}
+      {(role === 'admin' || role === 'management') && (
+        <div className="card" style={{ padding: '30px', marginTop: '20px' }}>
+          <div style={{ marginBottom: '20px' }}>
+            <h2 style={{ margin: 0, color: 'var(--secondary-color)', fontWeight: 600 }}>
+              🧪 {locale === 'ro' ? 'Prag Absorbție Cobb60' : 'Cobb60 Water Absorption Threshold'}
+            </h2>
+            <p style={{ margin: '5px 0 0 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+              Configure the maximum limit of water absorption in grams per square meter. Batch sheets exceeding this will trigger a warning.
+            </p>
+          </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+            <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--primary-color)', minWidth: '120px' }}>
+              {cobbThreshold} g/m²
+            </div>
+            <input
+              type="range"
+              min="50"
+              max="300"
+              step="5"
+              style={{ width: '250px', cursor: 'pointer' }}
+              value={cobbThreshold}
+              onChange={(e) => handleUpdateCobbThreshold(Number(e.target.value))}
+            />
+            {savingCobb && <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Saving...</span>}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

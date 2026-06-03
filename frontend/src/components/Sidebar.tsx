@@ -11,14 +11,16 @@ const Sidebar: React.FC = () => {
   const { t } = useI18n();
 
   const allMenuItems = [
-    { name: 'Dashboard', path: '/crm/dashboard', roles: ['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai'] },
+    { name: 'Dashboard', path: '/crm/dashboard', roles: ['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai', 'quality'] },
     { name: 'Leads', path: '/crm/leads', roles: ['admin', 'sales', 'asm', 'ai', 'rsm', 'sales_manager', 'management'] },
     { name: 'Opportunities', path: '/crm/opportunities', roles: ['admin', 'sales', 'asm', 'ai', 'rsm', 'sales_manager', 'management'] },
     { name: 'Customers', path: '/crm/customers', roles: ['admin', 'sales', 'asm', 'ai', 'rsm', 'sales_manager', 'management'] },
-    { name: 'Configurator', path: '/crm/configurator', roles: ['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai'] },
+    { name: 'Configurator', path: '/crm/configurator', roles: ['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai', 'quality'] },
     { name: 'Sales', path: '/crm/sales', roles: ['admin', 'sales', 'asm', 'ai', 'rsm', 'sales_manager', 'management'] },
-    { name: 'Projects', path: '/crm/projects', roles: ['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai'] },
-    { name: 'Production', path: '/crm/production', roles: ['admin', 'production', 'sales', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai'] },
+    { name: 'Projects', path: '/crm/projects', roles: ['admin', 'sales', 'production', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai', 'quality'] },
+    { name: 'Production', path: '/crm/production', roles: ['admin', 'production', 'sales', 'viewer', 'management', 'sales_manager', 'rsm', 'asm', 'ai', 'quality'] },
+    { name: 'QA & Claims', path: '/crm/claims', roles: ['admin', 'quality', 'management', 'sales'] },
+    { name: 'Load Optimizer', path: '/crm/truck-optimizer', roles: ['admin', 'quality', 'management', 'sales', 'production', 'sales_manager', 'rsm', 'asm', 'ai'] },
     { name: 'Admin', path: '/crm/admin', roles: ['admin', 'management', 'sales_manager', 'rsm'] },
   ];
 

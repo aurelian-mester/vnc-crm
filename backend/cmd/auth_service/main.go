@@ -173,7 +173,8 @@ func initDB() {
 				('sales', 10.0, 20.0),
 				('ai', 10.0, 20.0),
 				('viewer', 0.0, 0.0),
-				('production', 0.0, 0.0)
+				('production', 0.0, 0.0),
+				('quality', 0.0, 0.0)
 				ON CONFLICT (role) DO NOTHING;
 			`)
 			if err != nil {
@@ -744,7 +745,7 @@ func handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 
 	validRoles := map[string]bool{
 		"admin": true, "sales": true, "production": true, "viewer": true,
-		"asm": true, "ai": true, "rsm": true, "sales_manager": true, "management": true,
+		"asm": true, "ai": true, "rsm": true, "sales_manager": true, "management": true, "quality": true,
 	}
 	if !validRoles[req.Role] {
 		http.Error(w, "Invalid role value", http.StatusBadRequest)

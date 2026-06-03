@@ -162,11 +162,106 @@ func initDB() {
 				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 			);
+
+			CREATE TABLE IF NOT EXISTS lab_tests (
+				id SERIAL PRIMARY KEY,
+				batch_id VARCHAR(50) NOT NULL UNIQUE,
+				production_line VARCHAR(50) NOT NULL,
+				testing_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				ect NUMERIC(10, 2) NOT NULL,
+				bct NUMERIC(10, 2) NOT NULL,
+				fct NUMERIC(10, 2) NOT NULL,
+				bursting_strength NUMERIC(10, 2) NOT NULL,
+				cobb_test NUMERIC(10, 2) NOT NULL,
+				material_grade VARCHAR(50) NOT NULL,
+				delivery_note_no VARCHAR(50)
+			);
+
+			CREATE TABLE IF NOT EXISTS claims (
+				id SERIAL PRIMARY KEY,
+				customer_id VARCHAR(50) NOT NULL REFERENCES customers(id),
+				quote_id INT REFERENCES quotes(id) ON DELETE SET NULL,
+				batch_id VARCHAR(50) REFERENCES lab_tests(batch_id) ON DELETE SET NULL,
+				root_cause_category VARCHAR(50),
+				root_cause_details VARCHAR(255),
+				status VARCHAR(50) DEFAULT 'New',
+				description TEXT NOT NULL,
+				resolution_decision VARCHAR(50),
+				credit_note_amount NUMERIC(15, 2) DEFAULT 0.0,
+				replacement_quote_id INT,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			);
+
+			CREATE TABLE IF NOT EXISTS quality_configs (
+				key VARCHAR(50) PRIMARY KEY,
+				value NUMERIC(10, 2) NOT NULL,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			);
+
+			CREATE TABLE IF NOT EXISTS pallet_presets (
+				id SERIAL PRIMARY KEY,
+				name VARCHAR(50) NOT NULL UNIQUE,
+				length_mm INT NOT NULL,
+				width_mm INT NOT NULL,
+				max_height_mm INT NOT NULL DEFAULT 2000,
+				tare_weight_kg FLOAT NOT NULL DEFAULT 25.0
+			);
+
+			CREATE TABLE IF NOT EXISTS truck_presets (
+				id SERIAL PRIMARY KEY,
+				name VARCHAR(50) NOT NULL UNIQUE,
+				type VARCHAR(20) NOT NULL,
+				bed_length_mm INT NOT NULL,
+				bed_width_mm INT NOT NULL,
+				bed_height_mm INT NOT NULL,
+				max_payload_kg FLOAT NOT NULL,
+				is_tandem BOOLEAN NOT NULL DEFAULT FALSE,
+				trailer_length_mm INT DEFAULT 0,
+				trailer_payload_kg FLOAT DEFAULT 0.0
+			);
+
+			CREATE TABLE IF NOT EXISTS load_plans (
+				id SERIAL PRIMARY KEY,
+				title VARCHAR(100) NOT NULL,
+				truck_preset_id INT REFERENCES truck_presets(id),
+				total_pallets INT NOT NULL,
+				utilization_percentage FLOAT NOT NULL,
+				total_weight_kg FLOAT NOT NULL,
+				payload_layout TEXT NOT NULL,
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+				updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			);
 		`)
 		if err != nil {
-			log.Printf("Error creating crm_db quotes tables: %v", err)
+			log.Printf("Error creating crm_db quotes/qa tables: %v", err)
 		} else {
-			log.Println("Quotes database tables created/verified.")
+			log.Println("Quotes & QA database tables created/verified.")
+			// Seed Cobb threshold default
+			_, _ = db.Exec("INSERT INTO quality_configs (key, value) VALUES ('cobb_threshold', 150.00) ON CONFLICT (key) DO NOTHING;")
+			// Seed mock lab tests
+			_, _ = db.Exec(`
+				INSERT INTO lab_tests (batch_id, production_line, ect, bct, fct, bursting_strength, cobb_test, material_grade, delivery_note_no) VALUES
+				('BATCH-2026-001', 'Corrugator L1', 5.20, 2800.00, 310.00, 450.00, 125.00, 'Testliner', 'DN-99401'),
+				('BATCH-2026-002', 'Corrugator L2', 3.80, 1900.00, 220.00, 320.00, 185.00, 'Schrenz', 'DN-99402'),
+				('BATCH-2026-003', 'Corrugator L1', 4.50, 2400.00, 280.00, 400.00, 140.00, 'Wellenstoff', 'DN-99403')
+				ON CONFLICT (batch_id) DO NOTHING;
+			`)
+			// Seed truck presets
+			_, _ = db.Exec(`
+				INSERT INTO truck_presets (name, type, bed_length_mm, bed_width_mm, bed_height_mm, max_payload_kg, is_tandem, trailer_length_mm, trailer_payload_kg) VALUES
+				('Standard Semi-Trailer', 'Semi', 13600, 2450, 2700, 24000.0, FALSE, 0, 0.0),
+				('Tandem Rig (Truck + Trailer)', 'Tandem', 7300, 2450, 3000, 12000.0, TRUE, 8200, 14000.0)
+				ON CONFLICT (name) DO NOTHING;
+			`)
+			// Seed pallet presets
+			_, _ = db.Exec(`
+				INSERT INTO pallet_presets (name, length_mm, width_mm, max_height_mm, tare_weight_kg) VALUES
+				('Euro Pallet (EPAL 1)', 1200, 800, 2000, 25.0),
+				('Industrial Pallet (ISO)', 1200, 1000, 2000, 35.0),
+				('Half Euro Pallet', 600, 800, 1500, 15.0)
+				ON CONFLICT (name) DO NOTHING;
+			`)
 		}
 	}
 
@@ -239,6 +334,24 @@ func main() {
 	r.HandleFunc("/projects", handleGetProjects).Methods("GET")
 	r.HandleFunc("/projects", handleCreateProject).Methods("POST")
 	r.HandleFunc("/projects/{id}", handleUpdateProject).Methods("PUT")
+	
+	// QA and Claims routes
+	r.HandleFunc("/lab-tests", handleGetLabTests).Methods("GET")
+	r.HandleFunc("/lab-tests/{batch_id}", handleGetLabTestDetails).Methods("GET")
+	r.HandleFunc("/lab-tests", handleCreateLabTest).Methods("POST")
+	r.HandleFunc("/claims", handleGetClaims).Methods("GET")
+	r.HandleFunc("/claims/{id}", handleGetClaimDetails).Methods("GET")
+	r.HandleFunc("/claims", handleCreateClaim).Methods("POST")
+	r.HandleFunc("/claims/{id}/status", handleUpdateClaimStatus).Methods("PUT")
+	r.HandleFunc("/claims/{id}/resolve", handleResolveClaim).Methods("PUT")
+	r.HandleFunc("/quality-config", handleGetQualityConfig).Methods("GET")
+	r.HandleFunc("/quality-config", handleUpdateQualityConfig).Methods("PUT")
+
+	// Logistics and Truck Loading routes
+	r.HandleFunc("/logistics/presets", handleGetLogisticsPresets).Methods("GET")
+	r.HandleFunc("/logistics/load-plans", handleGetLoadPlans).Methods("GET")
+	r.HandleFunc("/logistics/load-plans", handleCreateLoadPlan).Methods("POST")
+	r.HandleFunc("/logistics/optimize", handleOptimizeLoad).Methods("POST")
 
 	log.Println("CRM Service starting on :8082...")
 	log.Fatal(http.ListenAndServe(":8082", r))
@@ -493,19 +606,26 @@ func validateQuoteMargins(role string, items []QuoteItem) error {
 		var quantity int
 		var material string
 		var printing, dieCutting, gluing, stapling bool
+		var toolingPrintingPlatesCost, toolingDieCutMoldsCost float64
+		var toolingAmortizationVolume int
+		var amortizeTooling bool
 
 		// Check if config_params is populated
 		if item.ConfigParams != "" {
 			var params struct {
-				Length     float64 `json:"length"`
-				Width      float64 `json:"width"`
-				Height     float64 `json:"height"`
-				Quantity   int     `json:"quantity"`
-				Material   string  `json:"material"`
-				Printing   bool    `json:"printing"`
-				DieCutting bool    `json:"dieCutting"`
-				Gluing     bool    `json:"gluing"`
-				Stapling   bool    `json:"stapling"`
+				Length                    float64 `json:"length"`
+				Width                     float64 `json:"width"`
+				Height                    float64 `json:"height"`
+				Quantity                  int     `json:"quantity"`
+				Material                  string  `json:"material"`
+				Printing                  bool    `json:"printing"`
+				DieCutting                bool    `json:"dieCutting"`
+				Gluing                    bool    `json:"gluing"`
+				Stapling                  bool    `json:"stapling"`
+				ToolingPrintingPlatesCost float64 `json:"tooling_printing_plates_cost"`
+				ToolingDieCutMoldsCost    float64 `json:"tooling_die_cut_molds_cost"`
+				ToolingAmortizationVolume int     `json:"tooling_amortization_volume"`
+				AmortizeTooling           bool    `json:"amortize_tooling"`
 			}
 			if err := json.Unmarshal([]byte(item.ConfigParams), &params); err == nil {
 				length = params.Length
@@ -517,6 +637,10 @@ func validateQuoteMargins(role string, items []QuoteItem) error {
 				dieCutting = params.DieCutting
 				gluing = params.Gluing
 				stapling = params.Stapling
+				toolingPrintingPlatesCost = params.ToolingPrintingPlatesCost
+				toolingDieCutMoldsCost = params.ToolingDieCutMoldsCost
+				toolingAmortizationVolume = params.ToolingAmortizationVolume
+				amortizeTooling = params.AmortizeTooling
 			}
 		}
 
@@ -541,7 +665,7 @@ func validateQuoteMargins(role string, items []QuoteItem) error {
 				unitCost = item.UnitPrice * 0.7
 			}
 		} else {
-			// Custom box pricing cost logic
+			// Custom box pricing cost logic matching pricing_service
 			surfaceArea := 2.0 * (length*width + length*height + width*height) / 1000000.0
 			
 			var materialPricePerSQM float64
@@ -559,14 +683,110 @@ func validateQuoteMargins(role string, items []QuoteItem) error {
 				}
 			}
 
-			basePrice := surfaceArea * materialPricePerSQM * float64(quantity)
-			operationPrice := 0.0
-			if printing { operationPrice += 0.10 * float64(quantity) }
-			if dieCutting { operationPrice += 0.05 * float64(quantity) }
-			if gluing { operationPrice += 0.03 * float64(quantity) }
-			if stapling { operationPrice += 0.02 * float64(quantity) }
+			// Trim factor
+			trimFactor := 0.05
+			grossSheetArea := surfaceArea * (1.0 + trimFactor)
 
-			totalPrice := basePrice + operationPrice
+			// Machine Speeds
+			runSpeed := 6000.0
+			if printing {
+				runSpeed *= 0.85
+			}
+			if dieCutting {
+				runSpeed *= 0.80
+			}
+			if gluing || stapling {
+				runSpeed *= 0.90
+			}
+
+			// Waste Sheets
+			wasteQty := 50
+			runningWaste := 0.015 * float64(quantity)
+			if printing {
+				runningWaste += 0.010 * float64(quantity)
+			}
+			if dieCutting {
+				runningWaste += 0.010 * float64(quantity)
+			}
+			totalWaste := wasteQty + int(runningWaste)
+
+			// Material Price including setup waste and running waste sheets
+			totalSheetsNeeded := float64(quantity) + float64(totalWaste)
+			materialPrice := totalSheetsNeeded * grossSheetArea * materialPricePerSQM
+
+			// Setup times & costs
+			corrugatorSetupTime := 15.0
+			printingSetupTime := 0.0
+			if printing {
+				printingSetupTime = 15.0
+			}
+			dieCuttingSetupTime := 0.0
+			if dieCutting {
+				dieCuttingSetupTime = 20.0
+			}
+			gluingSetupTime := 0.0
+			if gluing {
+				gluingSetupTime = 15.0
+			}
+			staplingSetupTime := 0.0
+			if stapling {
+				staplingSetupTime = 10.0
+			}
+
+			corrugatorSetupRate := 300.0
+			printerSetupRate := 150.0
+			dieCutterSetupRate := 150.0
+			gluerStaplerSetupRate := 100.0
+
+			setupCost := (corrugatorSetupTime*corrugatorSetupRate +
+				printingSetupTime*printerSetupRate +
+				dieCuttingSetupTime*dieCutterSetupRate +
+				(gluingSetupTime+staplingSetupTime)*gluerStaplerSetupRate) / 60.0
+
+			// Running costs
+			corrugatorRunRate := 600.0
+			printerRunRate := 300.0
+			dieCutterRunRate := 300.0
+			gluerStaplerRunRate := 200.0
+
+			corrugatorRunTimeHours := float64(quantity) / 6000.0
+			convertingRunTimeHours := float64(quantity) / runSpeed
+
+			printingRunCost := 0.0
+			if printing {
+				printingRunCost = convertingRunTimeHours * printerRunRate
+			}
+			dieCuttingRunCost := 0.0
+			if dieCutting {
+				dieCuttingRunCost = convertingRunTimeHours * dieCutterRunRate
+			}
+			gluingRunCost := 0.0
+			if gluing {
+				gluingRunCost = convertingRunTimeHours * gluerStaplerRunRate
+			}
+			staplingRunCost := 0.0
+			if stapling {
+				staplingRunCost = convertingRunTimeHours * gluerStaplerRunRate
+			}
+
+			runCost := (corrugatorRunTimeHours * corrugatorRunRate) +
+				printingRunCost +
+				dieCuttingRunCost +
+				gluingRunCost +
+				staplingRunCost
+
+			// Tooling cost allocation
+			totalTooling := toolingPrintingPlatesCost + toolingDieCutMoldsCost
+			var toolingCost float64
+			if amortizeTooling && toolingAmortizationVolume > 0 {
+				toolingCost = float64(quantity) * (totalTooling / float64(toolingAmortizationVolume))
+			} else if !amortizeTooling {
+				toolingCost = totalTooling
+			} else {
+				toolingCost = 0.0
+			}
+
+			totalPrice := materialPrice + setupCost + runCost + toolingCost
 			estProductionCost := totalPrice * 0.7
 			unitCost = estProductionCost / float64(quantity)
 		}
@@ -1218,6 +1438,43 @@ type Project struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
+type LabTest struct {
+	ID               int       `json:"id"`
+	BatchID          string    `json:"batch_id"`
+	ProductionLine   string    `json:"production_line"`
+	TestingTimestamp time.Time `json:"testing_timestamp"`
+	ECT              float64   `json:"ect"`
+	BCT              float64   `json:"bct"`
+	FCT              float64   `json:"fct"`
+	BurstingStrength float64   `json:"bursting_strength"`
+	CobbTest         float64   `json:"cobb_test"`
+	MaterialGrade    string    `json:"material_grade"`
+	DeliveryNoteNo   string    `json:"delivery_note_no"`
+}
+
+type Claim struct {
+	ID                 int        `json:"id"`
+	CustomerID         string     `json:"customer_id"`
+	CustomerName       string     `json:"customer_name,omitempty"`
+	QuoteID            *int       `json:"quote_id"`
+	BatchID            *string    `json:"batch_id"`
+	RootCauseCategory  string     `json:"root_cause_category"`
+	RootCauseDetails   string     `json:"root_cause_details"`
+	Status             string     `json:"status"`
+	Description        string     `json:"description"`
+	ResolutionDecision *string    `json:"resolution_decision"`
+	CreditNoteAmount   float64    `json:"credit_note_amount"`
+	ReplacementQuoteID *int       `json:"replacement_quote_id"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}
+
+type QualityConfig struct {
+	Key       string    `json:"key"`
+	Value     float64   `json:"value"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // Leads handlers
 func handleGetLeads(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -1496,6 +1753,20 @@ func handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	if strings.ToLower(req.Status) == "completed" {
+		batchID := fmt.Sprintf("BATCH-PROJ-%d", id)
+		_, errIns := db.Exec(`
+			INSERT INTO lab_tests (batch_id, production_line, ect, bct, fct, bursting_strength, cobb_test, material_grade, delivery_note_no)
+			VALUES ($1, 'Corrugator L1', 0.0, 0.0, 0.0, 0.0, 0.0, 'Draft', $2)
+			ON CONFLICT (batch_id) DO NOTHING`,
+			batchID, fmt.Sprintf("DN-PROJ-%d", id),
+		)
+		if errIns != nil {
+			log.Printf("Error creating draft lab test for completed project: %v", errIns)
+		}
+	}
+
 	w.Write([]byte(`{"status":"success"}`))
 }
 
@@ -1760,4 +2031,1006 @@ func handleGetCustomerMetrics(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(res)
 }
+
+// Lab Tests Handlers
+func handleGetLabTests(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if db == nil {
+		json.NewEncoder(w).Encode([]LabTest{})
+		return
+	}
+
+	rows, err := db.Query(`
+		SELECT id, batch_id, production_line, testing_timestamp, ect, bct, fct, bursting_strength, cobb_test, material_grade, delivery_note_no 
+		FROM lab_tests 
+		ORDER BY testing_timestamp DESC
+	`)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var list []LabTest
+	for rows.Next() {
+		var t LabTest
+		var note sql.NullString
+		err := rows.Scan(
+			&t.ID, &t.BatchID, &t.ProductionLine, &t.TestingTimestamp,
+			&t.ECT, &t.BCT, &t.FCT, &t.BurstingStrength, &t.CobbTest, &t.MaterialGrade,
+			&note,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if note.Valid {
+			t.DeliveryNoteNo = note.String
+		}
+		list = append(list, t)
+	}
+	if list == nil {
+		list = []LabTest{}
+	}
+	json.NewEncoder(w).Encode(list)
+}
+
+func handleGetLabTestDetails(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	vars := mux.Vars(r)
+	batchID := vars["batch_id"]
+
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	var t LabTest
+	var note sql.NullString
+	err := db.QueryRow(`
+		SELECT id, batch_id, production_line, testing_timestamp, ect, bct, fct, bursting_strength, cobb_test, material_grade, delivery_note_no 
+		FROM lab_tests 
+		WHERE batch_id = $1`,
+		batchID,
+	).Scan(
+		&t.ID, &t.BatchID, &t.ProductionLine, &t.TestingTimestamp,
+		&t.ECT, &t.BCT, &t.FCT, &t.BurstingStrength, &t.CobbTest, &t.MaterialGrade,
+		&note,
+	)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Lab test not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if note.Valid {
+		t.DeliveryNoteNo = note.String
+	}
+
+	json.NewEncoder(w).Encode(t)
+}
+
+func handleCreateLabTest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	role := claims["role"].(string)
+	if role != "admin" && role != "management" && role != "quality" {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	var req LabTest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if req.BatchID == "" {
+		http.Error(w, "batch_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = db.Exec(`
+		INSERT INTO lab_tests (batch_id, production_line, ect, bct, fct, bursting_strength, cobb_test, material_grade, delivery_note_no)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		ON CONFLICT (batch_id) DO UPDATE SET 
+			production_line = $2, ect = $3, bct = $4, fct = $5, bursting_strength = $6, cobb_test = $7, material_grade = $8, delivery_note_no = $9, testing_timestamp = CURRENT_TIMESTAMP`,
+		req.BatchID, req.ProductionLine, req.ECT, req.BCT, req.FCT, req.BurstingStrength, req.CobbTest, req.MaterialGrade, req.DeliveryNoteNo,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(req)
+}
+
+// Claims (RMA) Handlers
+func handleGetClaims(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	role := claims["role"].(string)
+	customerIDClaim, _ := claims["customer_id"].(string)
+
+	query := `
+		SELECT c.id, c.customer_id, cust.name as customer_name, c.quote_id, c.batch_id, 
+		       c.root_cause_category, c.root_cause_details, c.status, c.description, 
+		       c.resolution_decision, c.credit_note_amount, c.replacement_quote_id, 
+		       c.created_at, c.updated_at
+		FROM claims c
+		JOIN customers cust ON cust.id = c.customer_id
+	`
+	var args []interface{}
+	if role == "external" {
+		if customerIDClaim == "" {
+			http.Error(w, "Forbidden: No customer profile associated", http.StatusForbidden)
+			return
+		}
+		query += " WHERE c.customer_id = $1"
+		args = append(args, customerIDClaim)
+	} else {
+		// Salesperson can see claims for their customers
+		salespersonCode, _ := claims["salesperson_code"].(string)
+		if role == "sales" && salespersonCode != "" {
+			query += " WHERE cust.salesperson_code = $1"
+			args = append(args, salespersonCode)
+		}
+	}
+
+	query += " ORDER BY c.created_at DESC"
+
+	if db == nil {
+		json.NewEncoder(w).Encode([]Claim{})
+		return
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var list []Claim
+	for rows.Next() {
+		var c Claim
+		var qID sql.NullInt32
+		var bID sql.NullString
+		var resDec sql.NullString
+		var replQuoteID sql.NullInt32
+		err := rows.Scan(
+			&c.ID, &c.CustomerID, &c.CustomerName, &qID, &bID,
+			&c.RootCauseCategory, &c.RootCauseDetails, &c.Status, &c.Description,
+			&resDec, &c.CreditNoteAmount, &replQuoteID,
+			&c.CreatedAt, &c.UpdatedAt,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if qID.Valid {
+			val := int(qID.Int32)
+			c.QuoteID = &val
+		}
+		if bID.Valid {
+			val := bID.String
+			c.BatchID = &val
+		}
+		if resDec.Valid {
+			val := resDec.String
+			c.ResolutionDecision = &val
+		}
+		if replQuoteID.Valid {
+			val := int(replQuoteID.Int32)
+			c.ReplacementQuoteID = &val
+		}
+		list = append(list, c)
+	}
+	if list == nil {
+		list = []Claim{}
+	}
+	json.NewEncoder(w).Encode(list)
+}
+
+func handleGetClaimDetails(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	role := claims["role"].(string)
+	customerIDClaim, _ := claims["customer_id"].(string)
+
+	vars := mux.Vars(r)
+	id, _ := strconv.Atoi(vars["id"])
+
+	query := `
+		SELECT c.id, c.customer_id, cust.name as customer_name, c.quote_id, c.batch_id, 
+		       c.root_cause_category, c.root_cause_details, c.status, c.description, 
+		       c.resolution_decision, c.credit_note_amount, c.replacement_quote_id, 
+		       c.created_at, c.updated_at
+		FROM claims c
+		JOIN customers cust ON cust.id = c.customer_id
+		WHERE c.id = $1
+	`
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	var c Claim
+	var qID sql.NullInt32
+	var bID sql.NullString
+	var resDec sql.NullString
+	var replQuoteID sql.NullInt32
+
+	err = db.QueryRow(query, id).Scan(
+		&c.ID, &c.CustomerID, &c.CustomerName, &qID, &bID,
+		&c.RootCauseCategory, &c.RootCauseDetails, &c.Status, &c.Description,
+		&resDec, &c.CreditNoteAmount, &replQuoteID,
+		&c.CreatedAt, &c.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Claim not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if qID.Valid {
+		val := int(qID.Int32)
+		c.QuoteID = &val
+	}
+	if bID.Valid {
+		val := bID.String
+		c.BatchID = &val
+	}
+	if resDec.Valid {
+		val := resDec.String
+		c.ResolutionDecision = &val
+	}
+	if replQuoteID.Valid {
+		val := int(replQuoteID.Int32)
+		c.ReplacementQuoteID = &val
+	}
+
+	// Authorization Check: external users can only view their own claims
+	if role == "external" && c.CustomerID != customerIDClaim {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	json.NewEncoder(w).Encode(c)
+}
+
+func handleCreateClaim(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	role := claims["role"].(string)
+	customerIDClaim, _ := claims["customer_id"].(string)
+
+	var req Claim
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if role == "external" {
+		if customerIDClaim == "" {
+			http.Error(w, "Forbidden: No customer profile associated", http.StatusForbidden)
+			return
+		}
+		req.CustomerID = customerIDClaim
+	}
+
+	if req.CustomerID == "" {
+		http.Error(w, "customer_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Description == "" {
+		http.Error(w, "description is required", http.StatusBadRequest)
+		return
+	}
+
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	var claimID int
+	err = db.QueryRow(`
+		INSERT INTO claims (customer_id, quote_id, batch_id, root_cause_category, root_cause_details, status, description)
+		VALUES ($1, $2, $3, $4, $5, 'New', $6)
+		RETURNING id`,
+		req.CustomerID, req.QuoteID, req.BatchID, req.RootCauseCategory, req.RootCauseDetails, req.Description,
+	).Scan(&claimID)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	req.ID = claimID
+	req.Status = "New"
+	req.CreatedAt = time.Now()
+	req.UpdatedAt = time.Now()
+
+	json.NewEncoder(w).Encode(req)
+}
+
+func handleUpdateClaimStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	role := claims["role"].(string)
+	if role != "admin" && role != "management" && role != "quality" && role != "sales" {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	vars := mux.Vars(r)
+	id, _ := strconv.Atoi(vars["id"])
+
+	type StatusReq struct {
+		Status string `json:"status"`
+	}
+	var sReq StatusReq
+	if err := json.NewDecoder(r.Body).Decode(&sReq); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if sReq.Status == "" {
+		http.Error(w, "status is required", http.StatusBadRequest)
+		return
+	}
+
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = db.Exec(`
+		UPDATE claims 
+		SET status = $1, updated_at = CURRENT_TIMESTAMP 
+		WHERE id = $2`,
+		sReq.Status, id,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Write([]byte(`{"status":"success"}`))
+}
+
+func handleResolveClaim(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	role := claims["role"].(string)
+	if role != "admin" && role != "management" && role != "quality" && role != "sales" {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	vars := mux.Vars(r)
+	id, _ := strconv.Atoi(vars["id"])
+
+	type ResolveReq struct {
+		Decision         string  `json:"decision"`
+		CreditNoteAmount float64 `json:"credit_note_amount"`
+	}
+	var resReq ResolveReq
+	if err := json.NewDecoder(r.Body).Decode(&resReq); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	var customerID string
+	var quoteID sql.NullInt32
+	err = db.QueryRow("SELECT customer_id, quote_id FROM claims WHERE id = $1", id).Scan(&customerID, &quoteID)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Claim not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var replacementQuoteID *int = nil
+	var finalStatus string = "Rejected"
+
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	if resReq.Decision == "Re-produce" {
+		finalStatus = "Replacement Queued"
+		if quoteID.Valid {
+			var origSalespersonCode string
+			err = tx.QueryRow("SELECT salesperson_code FROM quotes WHERE id = $1", quoteID.Int32).Scan(&origSalespersonCode)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to query original quote: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			var newQuoteID int
+			err = tx.QueryRow(`
+				INSERT INTO quotes (customer_id, salesperson_code, status, total_amount) 
+				VALUES ($1, $2, 'Approved', 0.0) RETURNING id`, 
+				customerID, origSalespersonCode,
+			).Scan(&newQuoteID)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to insert replacement quote: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			rows, err := db.Query("SELECT product_id, description, quantity, config_params FROM quote_items WHERE quote_id = $1", quoteID.Int32)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to query original items: %v", err), http.StatusInternalServerError)
+				return
+			}
+			defer rows.Close()
+
+			type ItemToInsert struct {
+				ProductID    sql.NullString
+				Description  string
+				Quantity     int
+				ConfigParams sql.NullString
+			}
+			var itemsToInsert []ItemToInsert
+			for rows.Next() {
+				var it ItemToInsert
+				if err := rows.Scan(&it.ProductID, &it.Description, &it.Quantity, &it.ConfigParams); err == nil {
+					itemsToInsert = append(itemsToInsert, it)
+				}
+			}
+
+			for _, it := range itemsToInsert {
+				desc := fmt.Sprintf("[RMA #%d Replacement] %s", id, it.Description)
+				_, err = tx.Exec(`
+					INSERT INTO quote_items (quote_id, product_id, description, quantity, unit_price, total_price, config_params) 
+					VALUES ($1, $2, $3, $4, 0.0, 0.0, $5)`,
+					newQuoteID, it.ProductID, desc, it.Quantity, it.ConfigParams,
+				)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("Failed to insert replacement item: %v", err), http.StatusInternalServerError)
+					return
+				}
+			}
+
+			replacementQuoteID = &newQuoteID
+		}
+	} else if resReq.Decision == "Credit Note" {
+		finalStatus = "Credit Issued"
+		if resReq.CreditNoteAmount > 0 {
+			_, err = tx.Exec("UPDATE customers SET credit_limit = credit_limit + $1 WHERE id = $2", resReq.CreditNoteAmount, customerID)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to update customer credit limit: %v", err), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
+	var repQVal interface{} = nil
+	if replacementQuoteID != nil {
+		repQVal = *replacementQuoteID
+	}
+
+	_, err = tx.Exec(`
+		UPDATE claims 
+		SET resolution_decision = $1, credit_note_amount = $2, replacement_quote_id = $3, status = $4, updated_at = CURRENT_TIMESTAMP 
+		WHERE id = $5`,
+		resReq.Decision, resReq.CreditNoteAmount, repQVal, finalStatus, id,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Write([]byte(`{"status":"success"}`))
+}
+
+func handleGetQualityConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := db.Query("SELECT key, value FROM quality_configs")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	configs := make(map[string]float64)
+	for rows.Next() {
+		var key string
+		var val float64
+		if err := rows.Scan(&key, &val); err == nil {
+			configs[key] = val
+		}
+	}
+	if _, exists := configs["cobb_threshold"]; !exists {
+		configs["cobb_threshold"] = 150.0
+	}
+
+	json.NewEncoder(w).Encode(configs)
+}
+
+func handleUpdateQualityConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
+		return
+	}
+	role := claims["role"].(string)
+	if role != "admin" && role != "management" {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
+	var req map[string]float64
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	for k, v := range req {
+		_, err = db.Exec(`
+			INSERT INTO quality_configs (key, value, updated_at) 
+			VALUES ($1, $2, CURRENT_TIMESTAMP) 
+			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = CURRENT_TIMESTAMP`,
+			k, v,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Write([]byte(`{"status":"success"}`))
+}
+
+// Logistics and Truck Loading types
+type PalletPreset struct {
+	ID           int     `json:"id"`
+	Name         string  `json:"name"`
+	LengthMM     int     `json:"length_mm"`
+	WidthMM      int     `json:"width_mm"`
+	MaxHeightMM  int     `json:"max_height_mm"`
+	TareWeightKG float64 `json:"tare_weight_kg"`
+}
+
+type TruckPreset struct {
+	ID               int     `json:"id"`
+	Name             string  `json:"name"`
+	Type             string  `json:"type"`
+	BedLengthMM      int     `json:"bed_length_mm"`
+	BedWidthMM       int     `json:"bed_width_mm"`
+	BedHeightMM      int     `json:"bed_height_mm"`
+	MaxPayloadKG     float64 `json:"max_payload_kg"`
+	IsTandem         bool    `json:"is_tandem"`
+	TrailerLengthMM  int     `json:"trailer_length_mm"`
+	TrailerPayloadKG float64 `json:"trailer_payload_kg"`
+}
+
+type LoadPlan struct {
+	ID                    int       `json:"id"`
+	Title                 string    `json:"title"`
+	TruckPresetID         int       `json:"truck_preset_id"`
+	TotalPallets          int       `json:"total_pallets"`
+	UtilizationPercentage float64   `json:"utilization_percentage"`
+	TotalWeightKG         float64   `json:"total_weight_kg"`
+	PayloadLayout         string    `json:"payload_layout"`
+	CreatedAt             time.Time `json:"created_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
+}
+
+type OptimizeRequestItem struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	LengthMM  int     `json:"length_mm"`
+	WidthMM   int     `json:"width_mm"`
+	HeightMM  int     `json:"height_mm"`
+	WeightKG  float64 `json:"weight_kg"`
+	Quantity  int     `json:"quantity"`
+	Stackable bool    `json:"stackable"`
+	Color     string  `json:"color"`
+}
+
+type OptimizeRequest struct {
+	TruckPresetID int                   `json:"truck_preset_id"`
+	Items         []OptimizeRequestItem `json:"items"`
+}
+
+type PackedPallet struct {
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	X         int     `json:"x"`
+	Y         int     `json:"y"`
+	Z         int     `json:"z"`
+	Length    int     `json:"length"`
+	Width     int     `json:"width"`
+	Height    int     `json:"height"`
+	Weight    float64 `json:"weight"`
+	Rotated   bool    `json:"rotated"`
+	Color     string  `json:"color"`
+	IsTrailer bool    `json:"is_trailer"`
+}
+
+type OptimizeResponse struct {
+	TruckPreset           TruckPreset    `json:"truck_preset"`
+	PackedItems           []PackedPallet `json:"packed_items"`
+	UnpackedItems         []PackedPallet `json:"unpacked_items"`
+	FloorSpaceUtilization float64        `json:"floor_space_utilization"`
+	VolumeUtilization     float64        `json:"volume_utilization"`
+	TotalWeightKG         float64        `json:"total_weight_kg"`
+	WeightUtilization     float64        `json:"weight_utilization"`
+	AxleDistribution      string         `json:"axle_distribution"`
+}
+
+func handleGetLogisticsPresets(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	tRows, err := db.Query("SELECT id, name, type, bed_length_mm, bed_width_mm, bed_height_mm, max_payload_kg, is_tandem, trailer_length_mm, trailer_payload_kg FROM truck_presets")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer tRows.Close()
+
+	var trucks []TruckPreset = []TruckPreset{}
+	for tRows.Next() {
+		var t TruckPreset
+		if err := tRows.Scan(&t.ID, &t.Name, &t.Type, &t.BedLengthMM, &t.BedWidthMM, &t.BedHeightMM, &t.MaxPayloadKG, &t.IsTandem, &t.TrailerLengthMM, &t.TrailerPayloadKG); err == nil {
+			trucks = append(trucks, t)
+		}
+	}
+
+	pRows, err := db.Query("SELECT id, name, length_mm, width_mm, max_height_mm, tare_weight_kg FROM pallet_presets")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer pRows.Close()
+
+	var pallets []PalletPreset = []PalletPreset{}
+	for pRows.Next() {
+		var p PalletPreset
+		if err := pRows.Scan(&p.ID, &p.Name, &p.LengthMM, &p.WidthMM, &p.MaxHeightMM, &p.TareWeightKG); err == nil {
+			pallets = append(pallets, p)
+		}
+	}
+
+	resp := map[string]interface{}{
+		"trucks":  trucks,
+		"pallets": pallets,
+	}
+	json.NewEncoder(w).Encode(resp)
+}
+
+func handleGetLoadPlans(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := db.Query("SELECT id, title, truck_preset_id, total_pallets, utilization_percentage, total_weight_kg, payload_layout, created_at, updated_at FROM load_plans ORDER BY created_at DESC")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var list []LoadPlan = []LoadPlan{}
+	for rows.Next() {
+		var lp LoadPlan
+		if err := rows.Scan(&lp.ID, &lp.Title, &lp.TruckPresetID, &lp.TotalPallets, &lp.UtilizationPercentage, &lp.TotalWeightKG, &lp.PayloadLayout, &lp.CreatedAt, &lp.UpdatedAt); err == nil {
+			list = append(list, lp)
+		}
+	}
+
+	json.NewEncoder(w).Encode(list)
+}
+
+func handleCreateLoadPlan(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var lp LoadPlan
+	if err := json.NewDecoder(r.Body).Decode(&lp); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	err := db.QueryRow(`
+		INSERT INTO load_plans (title, truck_preset_id, total_pallets, utilization_percentage, total_weight_kg, payload_layout, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		RETURNING id, created_at, updated_at`,
+		lp.Title, lp.TruckPresetID, lp.TotalPallets, lp.UtilizationPercentage, lp.TotalWeightKG, lp.PayloadLayout,
+	).Scan(&lp.ID, &lp.CreatedAt, &lp.UpdatedAt)
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(lp)
+}
+
+func handleOptimizeLoad(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var req OptimizeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		return
+	}
+
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+
+	var t TruckPreset
+	err := db.QueryRow("SELECT id, name, type, bed_length_mm, bed_width_mm, bed_height_mm, max_payload_kg, is_tandem, trailer_length_mm, trailer_payload_kg FROM truck_presets WHERE id = $1", req.TruckPresetID).
+		Scan(&t.ID, &t.Name, &t.Type, &t.BedLengthMM, &t.BedWidthMM, &t.BedHeightMM, &t.MaxPayloadKG, &t.IsTandem, &t.TrailerLengthMM, &t.TrailerPayloadKG)
+	if err != nil {
+		http.Error(w, "Truck preset not found", http.StatusNotFound)
+		return
+	}
+
+	var rawPallets []PackedPallet = []PackedPallet{}
+	for _, item := range req.Items {
+		for qtyIdx := 0; qtyIdx < item.Quantity; qtyIdx++ {
+			rawPallets = append(rawPallets, PackedPallet{
+				ID:     fmt.Sprintf("%s-%d", item.ID, qtyIdx+1),
+				Name:   item.Name,
+				Length: item.LengthMM,
+				Width:  item.WidthMM,
+				Height: item.HeightMM,
+				Weight: item.WeightKG,
+				Color:  item.Color,
+			})
+		}
+	}
+
+	// Sort by area descending
+	for i := 0; i < len(rawPallets); i++ {
+		for j := i + 1; j < len(rawPallets); j++ {
+			areaI := rawPallets[i].Length * rawPallets[i].Width
+			areaJ := rawPallets[j].Length * rawPallets[j].Width
+			if areaJ > areaI {
+				rawPallets[i], rawPallets[j] = rawPallets[j], rawPallets[i]
+			}
+		}
+	}
+
+	var packed []PackedPallet = []PackedPallet{}
+	var unpacked []PackedPallet = []PackedPallet{}
+
+	if !t.IsTandem {
+		packed, unpacked = packBed(rawPallets, t.BedLengthMM, t.BedWidthMM, t.BedHeightMM, false)
+	} else {
+		truckPacked, remaining := packBed(rawPallets, t.BedLengthMM, t.BedWidthMM, t.BedHeightMM, false)
+		trailerPacked, stillRemaining := packBed(remaining, t.TrailerLengthMM, t.BedWidthMM, t.BedHeightMM, true)
+		
+		packed = append(packed, truckPacked...)
+		packed = append(packed, trailerPacked...)
+		unpacked = stillRemaining
+	}
+
+	totalFloorArea := float64(t.BedLengthMM * t.BedWidthMM)
+	if t.IsTandem {
+		totalFloorArea += float64(t.TrailerLengthMM * t.BedWidthMM)
+	}
+
+	var packedFloorArea float64 = 0
+	var packedVolume float64 = 0
+	var totalWeight float64 = 0
+
+	for _, p := range packed {
+		if p.Z == 0 {
+			packedFloorArea += float64(p.Length * p.Width)
+		}
+		packedVolume += float64(p.Length * p.Width * p.Height)
+		totalWeight += p.Weight
+	}
+
+	floorSpaceUtilization := 0.0
+	if totalFloorArea > 0 {
+		floorSpaceUtilization = (packedFloorArea / totalFloorArea) * 100.0
+	}
+
+	totalBedVolume := float64(t.BedLengthMM * t.BedWidthMM * t.BedHeightMM)
+	if t.IsTandem {
+		totalBedVolume += float64(t.TrailerLengthMM * t.BedWidthMM * t.BedHeightMM)
+	}
+	volumeUtilization := 0.0
+	if totalBedVolume > 0 {
+		volumeUtilization = (packedVolume / totalBedVolume) * 100.0
+	}
+
+	maxPayload := t.MaxPayloadKG
+	if t.IsTandem {
+		maxPayload += t.TrailerPayloadKG
+	}
+	weightUtilization := 0.0
+	if maxPayload > 0 {
+		weightUtilization = (totalWeight / maxPayload) * 100.0
+	}
+
+	axleDistribution := "Balanced"
+	if len(packed) > 0 {
+		var sumWeightTimesX float64 = 0
+		var sumWeight float64 = 0
+		for _, p := range packed {
+			if !p.IsTrailer {
+				sumWeightTimesX += p.Weight * (float64(p.X) + float64(p.Length)/2.0)
+				sumWeight += p.Weight
+			}
+		}
+		if sumWeight > 0 {
+			cogPct := (sumWeightTimesX / float64(t.BedLengthMM)) / sumWeight * 100.0
+			if cogPct < 40.0 {
+				axleDistribution = "Front heavy"
+			} else if cogPct > 60.0 {
+				axleDistribution = "Rear heavy"
+			}
+		}
+	}
+
+	resp := OptimizeResponse{
+		TruckPreset:           t,
+		PackedItems:           packed,
+		UnpackedItems:         unpacked,
+		FloorSpaceUtilization: floorSpaceUtilization,
+		VolumeUtilization:     volumeUtilization,
+		TotalWeightKG:         totalWeight,
+		WeightUtilization:     weightUtilization,
+		AxleDistribution:      axleDistribution,
+	}
+
+	json.NewEncoder(w).Encode(resp)
+}
+
+func packBed(pallets []PackedPallet, bedLength, bedWidth, bedHeight int, isTrailer bool) ([]PackedPallet, []PackedPallet) {
+	var packed []PackedPallet = []PackedPallet{}
+	var unpacked []PackedPallet = []PackedPallet{}
+
+	currentX := 0
+	currentY := 0
+	maxShelfH := 0
+
+	for _, p := range pallets {
+		w, l := p.Width, p.Length
+		rotated := false
+		
+		if currentY + w <= bedWidth && currentX + l <= bedLength {
+			// fits non-rotated
+		} else if currentY + l <= bedWidth && currentX + w <= bedLength {
+			w, l = l, w
+			rotated = true
+		} else {
+			currentX += maxShelfH
+			currentY = 0
+			maxShelfH = 0
+			
+			if currentX + l <= bedLength && w <= bedWidth {
+				// fits non-rotated
+			} else if currentX + w <= bedLength && l <= bedWidth {
+				w, l = l, w
+				rotated = true
+			} else {
+				unpacked = append(unpacked, p)
+				continue
+			}
+		}
+		
+		p.X = currentX
+		p.Y = currentY
+		p.Z = 0
+		p.Length = l
+		p.Width = w
+		p.Rotated = rotated
+		p.IsTrailer = isTrailer
+		
+		packed = append(packed, p)
+		
+		currentY += w
+		if l > maxShelfH {
+			maxShelfH = l
+		}
+	}
+
+	var finalPacked []PackedPallet = []PackedPallet{}
+	finalPacked = append(finalPacked, packed...)
+	var stillUnpacked []PackedPallet = []PackedPallet{}
+
+	stackIdx := 0
+	for _, p := range unpacked {
+		stacked := false
+		for i := stackIdx; i < len(packed); i++ {
+			bottom := packed[i]
+			if bottom.Length == p.Length && bottom.Width == p.Width && bottom.Height + p.Height <= bedHeight {
+				p.X = bottom.X
+				p.Y = bottom.Y
+				p.Z = bottom.Height
+				p.Rotated = bottom.Rotated
+				p.IsTrailer = isTrailer
+				
+				finalPacked = append(finalPacked, p)
+				stacked = true
+				stackIdx = i + 1
+				break
+			}
+		}
+		if !stacked {
+			stillUnpacked = append(stillUnpacked, p)
+		}
+	}
+
+	return finalPacked, stillUnpacked
+}
+
+
 

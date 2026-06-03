@@ -54,6 +54,23 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
   const [selectedCustomerId, setSelectedCustomerId] = useState(preselectedCustomerId || '');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const { t } = useI18n();
+
+  const RON_TO_EUR = 4.97;
+  const formatPrice = (ronAmount: number, isLarge = false) => {
+    const eurAmount = ronAmount / RON_TO_EUR;
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '6px' }}>
+        <span style={{ fontSize: isLarge ? '1.25rem' : '0.95rem', fontWeight: 'bold' }}>
+          {ronAmount.toFixed(2)} RON
+        </span>
+        <span style={{ fontSize: isLarge ? '0.85rem' : '0.75rem', color: '#666', fontWeight: 'normal' }}>
+          (€{eurAmount.toFixed(2)})
+        </span>
+      </span>
+    );
+  };
+
+
   
   const [items, setItems] = useState<QuoteItemInput[]>([
     {
@@ -657,8 +674,8 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
 
                   <div style={{ textAlign: 'right' }}>
                     <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'block' }}>{t('line_total')}</label>
-                    <span style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--secondary-color)', display: 'block', marginTop: '10px' }}>
-                      {new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(it.quantity * it.unit_price)}
+                    <span style={{ display: 'block', marginTop: '10px' }}>
+                      {formatPrice(it.quantity * it.unit_price)}
                     </span>
                     {it.unit_price > 0 && (() => {
                       const cost = getItemProductionUnitCost(it);
@@ -733,9 +750,9 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
 
             {/* Price Calculations */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%', maxWidth: '400px', marginLeft: 'auto' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.95rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.95rem', alignItems: 'center' }}>
                 <span>{t('items_subtotal')}</span>
-                <span>{new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(subtotal)}</span>
+                {formatPrice(subtotal)}
               </div>
               
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.95rem' }}>
@@ -750,9 +767,9 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
                 />
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.3rem', fontWeight: 700, color: 'var(--primary-color)', borderTop: '1px solid var(--border-color)', paddingTop: '10px', marginTop: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '1.3rem', color: 'var(--primary-color)', borderTop: '1px solid var(--border-color)', paddingTop: '10px', marginTop: '10px' }}>
                 <span>{t('total_price_upper')}</span>
-                <span>{new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(total)}</span>
+                {formatPrice(total, true)}
               </div>
             </div>
             </div>
@@ -798,8 +815,8 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
                           </span>
                         </div>
                         <div style={{ display: 'flex', justifySelf: 'stretch', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem' }}>
-                          <span style={{ fontWeight: 'bold', color: 'var(--secondary-color)' }}>
-                            {new Intl.NumberFormat('ro-RO', { style: 'currency', currency: 'RON' }).format(v.total_amount)}
+                          <span>
+                            {formatPrice(v.total_amount)}
                           </span>
                           <span style={{ fontSize: '0.7rem', padding: '1px 6px', borderRadius: '4px', backgroundColor: '#e2e8f0', color: 'var(--text-muted)' }}>
                             {getStatusTranslation(v.status)}

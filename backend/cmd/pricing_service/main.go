@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,26 +24,44 @@ type Product struct {
 }
 
 type CalculationRequest struct {
-	Length             float64 `json:"length"`
-	Width              float64 `json:"width"`
-	Height             float64 `json:"height"`
-	Quantity           int     `json:"quantity"`
-	Material           string  `json:"material"` // e.g., "Testliner", "Schrenz", or product ID
-	Printing           bool    `json:"printing"`
-	DieCutting         bool    `json:"dieCutting"`
-	Gluing             bool    `json:"gluing"`
-	Stapling           bool    `json:"stapling"`
-	Discount           float64 `json:"discount"` // Percentage
-	CustomerPriceGroup string  `json:"customer_price_group"`
-	CustomerID         string  `json:"customer_id"`
+	Length                    float64 `json:"length"`
+	Width                     float64 `json:"width"`
+	Height                    float64 `json:"height"`
+	Quantity                  int     `json:"quantity"`
+	Material                  string  `json:"material"` // e.g., "Testliner", "Schrenz", or product ID
+	Printing                  bool    `json:"printing"`
+	DieCutting                bool    `json:"dieCutting"`
+	Gluing                    bool    `json:"gluing"`
+	Stapling                  bool    `json:"stapling"`
+	Discount                  float64 `json:"discount"` // Percentage
+	CustomerPriceGroup        string  `json:"customer_price_group"`
+	CustomerID                string  `json:"customer_id"`
+	ToolingPrintingPlatesCost float64 `json:"tooling_printing_plates_cost"`
+	ToolingDieCutMoldsCost    float64 `json:"tooling_die_cut_molds_cost"`
+	ToolingAmortizationVolume int     `json:"tooling_amortization_volume"`
+	AmortizeTooling           bool    `json:"amortize_tooling"`
+}
+
+type PriceTier struct {
+	Quantity    int     `json:"quantity"`
+	BaseCost    float64 `json:"baseCost"`    // Material + Waste
+	SetupCost   float64 `json:"setupCost"`   // Makeready machine costs
+	RunCost     float64 `json:"runCost"`     // Running machine costs
+	ToolingCost float64 `json:"toolingCost"` // Allocated tooling cost
+	TotalCost   float64 `json:"totalCost"`   // Sum of costs
+	FinalPrice  float64 `json:"finalPrice"`  // Sales price after markup & discount
+	UnitPrice   float64 `json:"unitPrice"`   // Per unit price
 }
 
 type CalculationResponse struct {
-	BaseCost      float64 `json:"baseCost"`
-	OperationCost float64 `json:"operationCost"`
-	TotalCost     float64 `json:"totalCost"`
-	FinalPrice    float64 `json:"finalPrice"` // After discount
-	UnitPrice     float64 `json:"unitPrice"`
+	BaseCost      float64     `json:"baseCost"`
+	OperationCost float64     `json:"operationCost"`
+	TotalCost     float64     `json:"totalCost"`
+	FinalPrice    float64     `json:"finalPrice"` // After discount
+	UnitPrice     float64     `json:"unitPrice"`
+	SetupCost     float64     `json:"setupCost"`
+	RunCost       float64     `json:"runCost"`
+	Tiers         []PriceTier `json:"tiers"`
 }
 
 var db *sql.DB
@@ -159,121 +178,142 @@ func handleGetProducts(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(products)
 }
 
-func handleCalculate(w http.ResponseWriter, r *http.Request) {
-	var req CalculationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	// Check if this is a standard product (dimensions are 0)
-	isStandardProduct := req.Length == 0 && req.Width == 0 && req.Height == 0
-
-	if isStandardProduct {
-		unitPrice := 0.0
-		priceFound := false
-
-		// 1. Check custom price list for the customer
-		if db != nil && req.CustomerID != "" {
-			err := db.QueryRow(`
-				SELECT pll.unit_price 
-				FROM price_list_lines pll
-				JOIN price_lists pl ON pll.price_list_code = pl.code
-				WHERE ((pl.assign_to_no = $1 AND pl.assign_to_type = 'Customer') OR pl.assign_to_type = 'All Customers')
-				  AND pll.product_no = $2
-				  AND (pl.starting_date IS NULL OR pl.starting_date <= CURRENT_DATE)
-				  AND (pl.ending_date IS NULL OR pl.ending_date >= CURRENT_DATE)
-				ORDER BY (CASE WHEN pl.assign_to_type = 'Customer' THEN 1 ELSE 2 END), pll.min_quantity DESC
-				LIMIT 1`, req.CustomerID, req.Material).Scan(&unitPrice)
-			if err == nil && unitPrice > 0 {
-				priceFound = true
-				log.Printf("Applied custom price for customer %s and standard product %s: %f", req.CustomerID, req.Material, unitPrice)
-			}
-		}
-
-		// 2. Fallback to default product price in catalog
-		if !priceFound && db != nil {
-			err := db.QueryRow("SELECT unit_price FROM products WHERE id = $1", req.Material).Scan(&unitPrice)
-			if err == nil && unitPrice > 0 {
-				priceFound = true
-			}
-		}
-
-		// 3. Fallback to legacy/static pricing rules
-		if !priceFound {
-			switch req.Material {
-			case "Testliner":
-				unitPrice = 0.80
-			case "Schrenz":
-				unitPrice = 0.60
-			case "Wellenstoff":
-				unitPrice = 0.70
-			}
-		}
-
-		totalCost := unitPrice * float64(req.Quantity)
-		discountAmount := totalCost * (req.Discount / 100.0)
-		finalPrice := totalCost - discountAmount
-
-		resp := CalculationResponse{
-			BaseCost:      totalCost,
-			OperationCost: 0.0,
-			TotalCost:     totalCost,
-			FinalPrice:    finalPrice,
-			UnitPrice:     finalPrice / float64(req.Quantity),
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	// Surface Area in square meters (approx for a box: 2*(L*W + L*H + W*H))
-	surfaceArea := 2 * (req.Length*req.Width + req.Length*req.Height + req.Width*req.Height) / 1000000.0
+func getQuantityTiers(q int) []int {
+	var tiers []int
 	
-	materialPricePerSQM := 0.50 // Default fallback
+	// 1. Between 0 and 1000 in 100 pcs steps
+	for i := 100; i <= 1000; i += 100 {
+		tiers = append(tiers, i)
+	}
+	
+	// 2. Between 1000 and 10000 in 1000 pcs steps
+	for i := 2000; i <= 10000; i += 1000 {
+		tiers = append(tiers, i)
+	}
+	
+	// 3. Between 10000 and 200000 in 5000 pcs steps
+	for i := 15000; i <= 200000; i += 5000 {
+		tiers = append(tiers, i)
+	}
+	
+	// 4. Ensure the requested quantity q is in the list
+	found := false
+	for _, val := range tiers {
+		if val == q {
+			found = true
+			break
+		}
+	}
+	if !found && q > 0 {
+		tiers = append(tiers, q)
+	}
+	
+	// Sort tiers and ensure unique values
+	sort.Ints(tiers)
+	
+	// Deduplicate
+	var uniqueTiers []int
+	for idx, val := range tiers {
+		if idx == 0 || val != tiers[idx-1] {
+			uniqueTiers = append(uniqueTiers, val)
+		}
+	}
+	
+	return uniqueTiers
+}
+
+func calculateStandardProductUnitPrice(req CalculationRequest, q int) float64 {
+	unitPrice := 0.0
 	priceFound := false
 
-	// Attempt to get price from price list lines if customer_id is set
+	// 1. Check custom price list for the customer matching quantity break
 	if db != nil && req.CustomerID != "" {
-		var customPrice float64
-		// Query price list lines for custom price matching the customer code (priority) or all customers
 		err := db.QueryRow(`
 			SELECT pll.unit_price 
 			FROM price_list_lines pll
 			JOIN price_lists pl ON pll.price_list_code = pl.code
 			WHERE ((pl.assign_to_no = $1 AND pl.assign_to_type = 'Customer') OR pl.assign_to_type = 'All Customers')
 			  AND pll.product_no = $2
+			  AND pll.min_quantity <= $3
 			  AND (pl.starting_date IS NULL OR pl.starting_date <= CURRENT_DATE)
 			  AND (pl.ending_date IS NULL OR pl.ending_date >= CURRENT_DATE)
 			ORDER BY (CASE WHEN pl.assign_to_type = 'Customer' THEN 1 ELSE 2 END), pll.min_quantity DESC
-			LIMIT 1`, req.CustomerID, req.Material).Scan(&customPrice)
+			LIMIT 1`, req.CustomerID, req.Material, q).Scan(&unitPrice)
+		if err == nil && unitPrice > 0 {
+			priceFound = true
+		}
+	}
+
+	// 2. Fallback to default product price in catalog
+	if !priceFound && db != nil {
+		err := db.QueryRow("SELECT unit_price FROM products WHERE id = $1", req.Material).Scan(&unitPrice)
+		if err == nil && unitPrice > 0 {
+			priceFound = true
+		}
+	}
+
+	// 3. Fallback to legacy/static pricing rules
+	if !priceFound {
+		switch req.Material {
+		case "Testliner":
+			unitPrice = 0.80
+		case "Schrenz":
+			unitPrice = 0.60
+		case "Wellenstoff":
+			unitPrice = 0.70
+		}
+	}
+
+	return unitPrice
+}
+
+func calculatePricingDetails(req CalculationRequest, q int) (materialPrice, setupCost, runCost, toolingCost, totalPrice, finalPrice, unitPrice float64) {
+	if q <= 0 {
+		return 0, 0, 0, 0, 0, 0, 0
+	}
+
+	// Surface Area in square meters (approx for a box: 2*(L*W + L*H + W*H))
+	surfaceArea := 2 * (req.Length*req.Width + req.Length*req.Height + req.Width*req.Height) / 1000000.0
+
+	materialPricePerSQM := 0.50
+	priceFound := false
+
+	// Attempt to get price from price list lines if customer_id is set
+	if db != nil && req.CustomerID != "" {
+		var customPrice float64
+		err := db.QueryRow(`
+			SELECT pll.unit_price 
+			FROM price_list_lines pll
+			JOIN price_lists pl ON pll.price_list_code = pl.code
+			WHERE ((pl.assign_to_no = $1 AND pl.assign_to_type = 'Customer') OR pl.assign_to_type = 'All Customers')
+			  AND pll.product_no = $2
+			  AND pll.min_quantity <= $3
+			  AND (pl.starting_date IS NULL OR pl.starting_date <= CURRENT_DATE)
+			  AND (pl.ending_date IS NULL OR pl.ending_date >= CURRENT_DATE)
+			ORDER BY (CASE WHEN pl.assign_to_type = 'Customer' THEN 1 ELSE 2 END), pll.min_quantity DESC
+			LIMIT 1`, req.CustomerID, req.Material, q).Scan(&customPrice)
 		if err == nil && customPrice > 0 {
 			materialPricePerSQM = customPrice
 			priceFound = true
-			log.Printf("Applied custom price for customer %s and product %s: %f", req.CustomerID, req.Material, customPrice)
 		}
 	}
 
 	// Attempt to get price from price list lines if customer price group is set (legacy fallback)
 	if !priceFound && db != nil && req.CustomerPriceGroup != "" {
 		var customPrice float64
-		// Query price list lines for custom price matching the material code
 		err := db.QueryRow(`
 			SELECT unit_price 
 			FROM price_list_lines 
-			WHERE price_list_code = $1 AND product_no = $2 
-			LIMIT 1`, req.CustomerPriceGroup, req.Material).Scan(&customPrice)
+			WHERE price_list_code = $1 AND product_no = $2 AND min_quantity <= $3
+			ORDER BY min_quantity DESC LIMIT 1`, req.CustomerPriceGroup, req.Material, q).Scan(&customPrice)
 		if err == nil && customPrice > 0 {
 			materialPricePerSQM = customPrice
 			priceFound = true
-			log.Printf("Applied legacy custom price list %s for product %s: %f", req.CustomerPriceGroup, req.Material, customPrice)
 		}
 	}
 
 	if !priceFound && db != nil {
 		var dbPrice float64
-		// Match by exact ID or description from products table
 		err := db.QueryRow("SELECT unit_price FROM products WHERE id = $1 OR description = $1", req.Material).Scan(&dbPrice)
 		if err == nil && dbPrice > 0 {
 			materialPricePerSQM = dbPrice
@@ -282,7 +322,6 @@ func handleCalculate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !priceFound {
-		// Switch-case fallback to static default pricing rules
 		switch req.Material {
 		case "Testliner":
 			materialPricePerSQM = 0.80
@@ -293,32 +332,196 @@ func handleCalculate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	baseCost := surfaceArea * materialPricePerSQM * float64(req.Quantity)
-	
-	operationCost := 0.0
+	// Trim factor
+	trimFactor := 0.05
+	grossSheetArea := surfaceArea * (1.0 + trimFactor)
+
+	// Machine Speed Run Speeds (synced with handleGetSpecs logic)
+	runSpeed := 6000.0
 	if req.Printing {
-		operationCost += 0.10 * float64(req.Quantity)
+		runSpeed *= 0.85
 	}
 	if req.DieCutting {
-		operationCost += 0.05 * float64(req.Quantity)
+		runSpeed *= 0.80
 	}
-	if req.Gluing {
-		operationCost += 0.03 * float64(req.Quantity)
-	}
-	if req.Stapling {
-		operationCost += 0.02 * float64(req.Quantity)
+	if req.Gluing || req.Stapling {
+		runSpeed *= 0.90
 	}
 
-	totalCost := baseCost + operationCost
-	discountAmount := totalCost * (req.Discount / 100.0)
-	finalPrice := totalCost - discountAmount
-	
+	// Setup and Running Waste Sheets
+	wasteQty := 50
+	runningWaste := 0.015 * float64(q)
+	if req.Printing {
+		runningWaste += 0.010 * float64(q)
+	}
+	if req.DieCutting {
+		runningWaste += 0.010 * float64(q)
+	}
+	totalWaste := wasteQty + int(runningWaste)
+
+	// Material Price including setup waste and running waste sheets
+	totalSheetsNeeded := float64(q) + float64(totalWaste)
+	materialPrice = totalSheetsNeeded * grossSheetArea * materialPricePerSQM
+
+	// Setup times & costs
+	corrugatorSetupTime := 15.0
+	printingSetupTime := 0.0
+	if req.Printing {
+		printingSetupTime = 15.0
+	}
+	dieCuttingSetupTime := 0.0
+	if req.DieCutting {
+		dieCuttingSetupTime = 20.0
+	}
+	gluingSetupTime := 0.0
+	if req.Gluing {
+		gluingSetupTime = 15.0
+	}
+	staplingSetupTime := 0.0
+	if req.Stapling {
+		staplingSetupTime = 10.0
+	}
+
+	corrugatorSetupRate := 300.0
+	printerSetupRate := 150.0
+	dieCutterSetupRate := 150.0
+	gluerStaplerSetupRate := 100.0
+
+	setupCost = (corrugatorSetupTime*corrugatorSetupRate +
+		printingSetupTime*printerSetupRate +
+		dieCuttingSetupTime*dieCutterSetupRate +
+		(gluingSetupTime+staplingSetupTime)*gluerStaplerSetupRate) / 60.0
+
+	// Running costs
+	corrugatorRunRate := 600.0
+	printerRunRate := 300.0
+	dieCutterRunRate := 300.0
+	gluerStaplerRunRate := 200.0
+
+	corrugatorRunTimeHours := float64(q) / 6000.0 // Corrugator fixed 6000/hr
+	convertingRunTimeHours := float64(q) / runSpeed
+
+	printingRunCost := 0.0
+	if req.Printing {
+		printingRunCost = convertingRunTimeHours * printerRunRate
+	}
+	dieCuttingRunCost := 0.0
+	if req.DieCutting {
+		dieCuttingRunCost = convertingRunTimeHours * dieCutterRunRate
+	}
+	gluingRunCost := 0.0
+	if req.Gluing {
+		gluingRunCost = convertingRunTimeHours * gluerStaplerRunRate
+	}
+	staplingRunCost := 0.0
+	if req.Stapling {
+		staplingRunCost = convertingRunTimeHours * gluerStaplerRunRate
+	}
+
+	runCost = (corrugatorRunTimeHours * corrugatorRunRate) +
+		printingRunCost +
+		dieCuttingRunCost +
+		gluingRunCost +
+		staplingRunCost
+
+	// Tooling cost allocation
+	totalTooling := req.ToolingPrintingPlatesCost + req.ToolingDieCutMoldsCost
+	if req.AmortizeTooling && req.ToolingAmortizationVolume > 0 {
+		toolingCost = float64(q) * (totalTooling / float64(req.ToolingAmortizationVolume))
+	} else if !req.AmortizeTooling {
+		toolingCost = totalTooling
+	} else {
+		toolingCost = 0.0
+	}
+
+	totalPrice = materialPrice + setupCost + runCost + toolingCost
+	discountAmount := totalPrice * (req.Discount / 100.0)
+	finalPrice = totalPrice - discountAmount
+	unitPrice = finalPrice / float64(q)
+
+	return materialPrice, setupCost, runCost, toolingCost, totalPrice, finalPrice, unitPrice
+}
+
+func handleCalculate(w http.ResponseWriter, r *http.Request) {
+	var req CalculationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	isStandardProduct := req.Length == 0 && req.Width == 0 && req.Height == 0
+
+	if isStandardProduct {
+		unitPrice := calculateStandardProductUnitPrice(req, req.Quantity)
+		totalCost := unitPrice * float64(req.Quantity)
+		discountAmount := totalCost * (req.Discount / 100.0)
+		finalPrice := totalCost - discountAmount
+
+		// Generate tiers
+		quantityTiers := getQuantityTiers(req.Quantity)
+		tiers := make([]PriceTier, len(quantityTiers))
+		for i, q := range quantityTiers {
+			tPrice := calculateStandardProductUnitPrice(req, q)
+			subTotal := tPrice * float64(q)
+			discAmt := subTotal * (req.Discount / 100.0)
+			fPrice := subTotal - discAmt
+			tiers[i] = PriceTier{
+				Quantity:    q,
+				BaseCost:    subTotal,
+				SetupCost:   0.0,
+				RunCost:     0.0,
+				ToolingCost: 0.0,
+				TotalCost:   subTotal,
+				FinalPrice:  fPrice,
+				UnitPrice:   fPrice / float64(q),
+			}
+		}
+
+		resp := CalculationResponse{
+			BaseCost:      totalCost,
+			OperationCost: 0.0,
+			TotalCost:     totalCost,
+			FinalPrice:    finalPrice,
+			UnitPrice:     finalPrice / float64(req.Quantity),
+			SetupCost:     0.0,
+			RunCost:       0.0,
+			Tiers:         tiers,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	// For Custom Box visualizer configuration:
+	materialPrice, setupCost, runCost, _, totalPrice, finalPrice, unitPrice := calculatePricingDetails(req, req.Quantity)
+
+	// Generate tiers
+	quantityTiers := getQuantityTiers(req.Quantity)
+	tiers := make([]PriceTier, len(quantityTiers))
+	for i, q := range quantityTiers {
+		mPrice, sCost, rCost, tCost, tPrice, fPrice, uPrice := calculatePricingDetails(req, q)
+		tiers[i] = PriceTier{
+			Quantity:    q,
+			BaseCost:    mPrice,
+			SetupCost:   sCost,
+			RunCost:     rCost,
+			ToolingCost: tCost,
+			TotalCost:   tPrice * 0.7, // 70% production cost
+			FinalPrice:  fPrice,
+			UnitPrice:   uPrice,
+		}
+	}
+
 	resp := CalculationResponse{
-		BaseCost:      baseCost,
-		OperationCost: operationCost,
-		TotalCost:     totalCost,
+		BaseCost:      materialPrice,
+		OperationCost: setupCost + runCost,
+		SetupCost:     setupCost,
+		RunCost:       runCost,
+		TotalCost:     totalPrice * 0.7, // 70% production cost (for margins validation)
 		FinalPrice:    finalPrice,
-		UnitPrice:     finalPrice / float64(req.Quantity),
+		UnitPrice:     unitPrice,
+		Tiers:         tiers,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

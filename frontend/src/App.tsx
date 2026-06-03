@@ -93,7 +93,7 @@ const TokenHandler = ({ setAuth }: { setAuth: any }) => {
 function App() {
   const { isAuthenticated, role, setAuth } = useAuth();
 
-  const isInternal = isAuthenticated && ['admin', 'sales', 'production', 'viewer', 'internal'].includes(role || '');
+  const isInternal = isAuthenticated && ['admin', 'sales', 'production', 'viewer', 'internal', 'quality'].includes(role || '');
   const isExternal = isAuthenticated && role === 'external';
 
   return (

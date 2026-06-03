@@ -11,17 +11,18 @@ const useCardboardTextures = (
   printText: string,
   hasRecycling: boolean,
   hasFragile: boolean,
-  hasUpArrows: boolean
+  hasUpArrows: boolean,
+  logoImage: HTMLImageElement | null
 ) => {
   return useMemo(() => {
-    // 1. Generate Canvas for Plain Cardboard
+    // 1. Generate Canvas for Plain Cardboard (High Resolution: 1024x1024)
     const plainCanvas = document.createElement('canvas');
-    plainCanvas.width = 512;
-    plainCanvas.height = 512;
+    plainCanvas.width = 1024;
+    plainCanvas.height = 1024;
     const pctx = plainCanvas.getContext('2d');
-    if (!pctx) return { plainTexture: null, printedTexture: null, alphaTexture: null };
+    if (!pctx) return { plainTexture: null, printedTexture: null, alphaTexture: null, bumpTexture: null };
 
-    // Set up material grade aesthetics (radial gradients, custom fiber tones, crease outlines)
+    // Set up material grade aesthetics
     let centerColor = '#dbb07d'; // Premium golden kraft brown
     let edgeColor = '#bf9460';
     let fiberColor = 'rgba(92, 61, 37, 0.18)';
@@ -46,75 +47,77 @@ const useCardboardTextures = (
     }
 
     // Fill base cardboard color with a radial gradient for depth
-    const gradient = pctx.createRadialGradient(256, 256, 60, 256, 256, 360);
+    const gradient = pctx.createRadialGradient(512, 512, 120, 512, 512, 720);
     gradient.addColorStop(0, centerColor);
     gradient.addColorStop(1, edgeColor);
     pctx.fillStyle = gradient;
-    pctx.fillRect(0, 0, 512, 512);
+    pctx.fillRect(0, 0, 1024, 1024);
 
-    // Draw realistic crease borders and fold markings (material themed)
+    // Draw realistic crease borders and fold markings
     pctx.strokeStyle = creaseColor;
-    pctx.lineWidth = 8;
-    pctx.strokeRect(0, 0, 512, 512);
+    pctx.lineWidth = 16;
+    pctx.strokeRect(0, 0, 1024, 1024);
 
     // Dashed inner crease lines
     pctx.strokeStyle = dashColor;
-    pctx.lineWidth = 4;
-    pctx.setLineDash([12, 8]);
-    pctx.strokeRect(8, 8, 496, 496);
+    pctx.lineWidth = 8;
+    pctx.setLineDash([24, 16]);
+    pctx.strokeRect(16, 16, 992, 992);
     pctx.setLineDash([]);
 
     // Subtle grain noise
-    for (let i = 0; i < 15000; i++) {
-      const x = Math.random() * 512;
-      const y = Math.random() * 512;
+    for (let i = 0; i < 60000; i++) {
+      const x = Math.random() * 1024;
+      const y = Math.random() * 1024;
       const val = Math.random() * 0.1;
       pctx.fillStyle = Math.random() > 0.5 ? `rgba(255,255,255,${val})` : `rgba(0,0,0,${val})`;
       pctx.fillRect(x, y, 1, 1);
     }
 
-    // Cardboard fiber specks (material themed)
+    // Cardboard fiber specks
     pctx.fillStyle = fiberColor;
-    for (let i = 0; i < 800; i++) {
-      const x = Math.random() * 512;
-      const y = Math.random() * 512;
-      const w = Math.random() * 3 + 1;
-      const h = Math.random() * 1.5 + 1;
+    for (let i = 0; i < 3000; i++) {
+      const x = Math.random() * 1024;
+      const y = Math.random() * 1024;
+      const w = Math.random() * 6 + 2;
+      const h = Math.random() * 3 + 2;
       pctx.fillRect(x, y, w, h);
     }
 
     // Secondary light fiber flecks for recycled look
     const lightFiberColor = material === 'Schrenz' ? 'rgba(230, 230, 230, 0.25)' : 'rgba(255, 255, 255, 0.15)';
     pctx.fillStyle = lightFiberColor;
-    for (let i = 0; i < 400; i++) {
-      const x = Math.random() * 512;
-      const y = Math.random() * 512;
-      const w = Math.random() * 2 + 1;
-      const h = Math.random() * 1 + 1;
+    for (let i = 0; i < 1500; i++) {
+      const x = Math.random() * 1024;
+      const y = Math.random() * 1024;
+      const w = Math.random() * 4 + 2;
+      const h = Math.random() * 2 + 2;
       pctx.fillRect(x, y, w, h);
     }
 
     // Horizontal fiber lines (corrugation pattern look)
     pctx.fillStyle = stripeColor;
-    for (let y = 0; y < 512; y += 6) {
-      pctx.fillRect(0, y, 512, 3.0);
+    for (let y = 0; y < 1024; y += 12) {
+      pctx.fillRect(0, y, 1024, 6.0);
     }
 
     const plainTex = new THREE.CanvasTexture(plainCanvas);
     plainTex.colorSpace = THREE.SRGBColorSpace;
-    plainTex.needsUpdate = true; // Force GPU upload
+    plainTex.needsUpdate = true;
 
     // 2. Generate Canvas for Printed Cardboard
     const printedCanvas = document.createElement('canvas');
-    printedCanvas.width = 512;
-    printedCanvas.height = 512;
+    printedCanvas.width = 1024;
+    printedCanvas.height = 1024;
     const sctx = printedCanvas.getContext('2d');
-    if (!sctx) return { plainTexture: plainTex, printedTexture: null, alphaTexture: null };
+    if (!sctx) return { plainTexture: plainTex, printedTexture: null, alphaTexture: null, bumpTexture: null };
 
     // Copy plain canvas background to preserve identical cardboard noise
     sctx.drawImage(plainCanvas, 0, 0);
 
-    // Helper to convert hex to rgba
+    // Realistic print ink blending simulation using MULTIPLY composite mode
+    sctx.globalCompositeOperation = 'multiply';
+
     const hexToRgba = (hex: string, alpha: number) => {
       const r = parseInt(hex.slice(1, 3), 16);
       const g = parseInt(hex.slice(3, 5), 16);
@@ -122,139 +125,122 @@ const useCardboardTextures = (
       return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     };
 
-    // Realistic print ink blending simulation using MULTIPLY composite mode
-    sctx.globalCompositeOperation = 'multiply';
-
     const inkColor = hexToRgba(printColor, 0.88);
 
     // Draw stamp border
     sctx.strokeStyle = hexToRgba(printColor, 0.65);
-    sctx.lineWidth = 6;
-    sctx.strokeRect(50, 110, 412, 292);
+    sctx.lineWidth = 12;
+    sctx.strokeRect(100, 220, 824, 584);
 
     sctx.strokeStyle = hexToRgba(printColor, 0.55);
-    sctx.lineWidth = 2;
-    sctx.strokeRect(60, 120, 392, 272);
+    sctx.lineWidth = 4;
+    sctx.strokeRect(120, 240, 784, 544);
 
     // Draw main custom brand text
     sctx.fillStyle = hexToRgba(printColor, 0.92);
-    sctx.font = 'bold 34px monospace';
+    sctx.font = 'bold 68px monospace';
     sctx.textAlign = 'center';
-    sctx.fillText(printText || 'VRANCART', 256, 185);
+    sctx.fillText(printText || 'VRANCART', 512, 370);
 
     // Sub-labels
     sctx.fillStyle = hexToRgba(printColor, 0.75);
-    sctx.font = 'bold 12px monospace';
-    sctx.fillText('DO NOT DOUBLE STACK', 256, 225);
-    sctx.fillText('FRAGILE - HANDLE WITH CARE', 256, 245);
+    sctx.font = 'bold 24px monospace';
+    sctx.fillText('DO NOT DOUBLE STACK', 512, 450);
+    sctx.fillText('FRAGILE - HANDLE WITH CARE', 512, 490);
 
     // Draw custom symbols centered at the bottom of the stamp
     const drawUpArrows = (x: number, y: number) => {
       sctx.strokeStyle = inkColor;
-      sctx.lineWidth = 3;
+      sctx.lineWidth = 6;
       // Baseline
       sctx.beginPath();
-      sctx.moveTo(x - 18, y + 15);
-      sctx.lineTo(x + 18, y + 15);
+      sctx.moveTo(x - 36, y + 30);
+      sctx.lineTo(x + 36, y + 30);
       sctx.stroke();
-      // Arrow 1 (left)
+      // Arrow 1
       sctx.beginPath();
-      sctx.moveTo(x - 9, y + 10);
-      sctx.lineTo(x - 9, y - 15);
-      sctx.stroke();
-      sctx.beginPath();
-      sctx.moveTo(x - 14, y - 5);
-      sctx.lineTo(x - 9, y - 15);
-      sctx.lineTo(x - 4, y - 5);
-      sctx.stroke();
-      // Arrow 2 (right)
-      sctx.beginPath();
-      sctx.moveTo(x + 9, y + 10);
-      sctx.lineTo(x + 9, y - 15);
+      sctx.moveTo(x - 18, y + 20);
+      sctx.lineTo(x - 18, y - 30);
       sctx.stroke();
       sctx.beginPath();
-      sctx.moveTo(x + 4, y - 5);
-      sctx.lineTo(x + 9, y - 15);
-      sctx.lineTo(x + 14, y - 5);
+      sctx.moveTo(x - 28, y - 10);
+      sctx.lineTo(x - 18, y - 30);
+      sctx.lineTo(x - 8, y - 10);
+      sctx.stroke();
+      // Arrow 2
+      sctx.beginPath();
+      sctx.moveTo(x + 18, y + 20);
+      sctx.lineTo(x + 18, y - 30);
+      sctx.stroke();
+      sctx.beginPath();
+      sctx.moveTo(x + 8, y - 10);
+      sctx.lineTo(x + 18, y - 30);
+      sctx.lineTo(x + 28, y - 10);
       sctx.stroke();
     };
 
     const drawFragile = (x: number, y: number) => {
       sctx.strokeStyle = inkColor;
-      sctx.lineWidth = 3;
-      // Bowl top rim
+      sctx.lineWidth = 6;
       sctx.beginPath();
-      sctx.moveTo(x - 13, y - 15);
-      sctx.lineTo(x + 13, y - 15);
+      sctx.moveTo(x - 26, y - 30);
+      sctx.lineTo(x + 26, y - 30);
       sctx.stroke();
-      // Bowl U-shape bowl
       sctx.beginPath();
-      sctx.arc(x, y - 15, 13, 0, Math.PI);
+      sctx.arc(x, y - 30, 26, 0, Math.PI);
       sctx.stroke();
-      // Stem
       sctx.beginPath();
       sctx.moveTo(x, y);
-      sctx.lineTo(x, y + 12);
+      sctx.lineTo(x, y + 24);
       sctx.stroke();
-      // Base
       sctx.beginPath();
-      sctx.moveTo(x - 10, y + 12);
-      sctx.lineTo(x + 10, y + 12);
+      sctx.moveTo(x - 20, y + 24);
+      sctx.lineTo(x + 20, y + 24);
       sctx.stroke();
-      // Diagonal crack
+      // Crack
       sctx.strokeStyle = inkColor;
-      sctx.lineWidth = 1.5;
+      sctx.lineWidth = 3;
       sctx.beginPath();
-      sctx.moveTo(x - 4, y - 15);
-      sctx.lineTo(x - 1, y - 5);
-      sctx.lineTo(x - 7, y + 2);
+      sctx.moveTo(x - 8, y - 30);
+      sctx.lineTo(x - 2, y - 10);
+      sctx.lineTo(x - 14, y + 4);
       sctx.stroke();
     };
 
     const drawRecycling = (x: number, y: number) => {
       sctx.strokeStyle = inkColor;
-      sctx.lineWidth = 3;
-      const r = 15;
+      sctx.lineWidth = 6;
+      const r = 30;
       for (let angle = 0; angle < 2 * Math.PI; angle += (2 * Math.PI) / 3) {
-        // Draw the curved arc of the arrow
         sctx.beginPath();
         sctx.arc(x, y, r, angle + 0.2, angle + (2 * Math.PI) / 3 - 0.45);
         sctx.stroke();
 
-        // Calculate end point of the arc where arrowhead goes
         const endAngle = angle + (2 * Math.PI) / 3 - 0.45;
         const ax = x + r * Math.cos(endAngle);
         const ay = y + r * Math.sin(endAngle);
-
-        // Tangent angle at the end of the arc (pointing counter-clockwise)
         const psi = endAngle + Math.PI / 2;
 
-        // Draw triangular arrowhead
         sctx.fillStyle = inkColor;
         sctx.beginPath();
-        sctx.moveTo(ax, ay); // Tip of arrow at the end of the arc
-
-        // Back-left of the arrowhead
-        const arrowLength = 7;
-        const arrowHalfAngle = 0.5; // approx 28 degrees
+        sctx.moveTo(ax, ay);
+        const arrowLength = 14;
+        const arrowHalfAngle = 0.5;
         const x1 = ax - arrowLength * Math.cos(psi - arrowHalfAngle);
         const y1 = ay - arrowLength * Math.sin(psi - arrowHalfAngle);
         sctx.lineTo(x1, y1);
-
-        // Back-right of the arrowhead
         const x2 = ax - arrowLength * Math.cos(psi + arrowHalfAngle);
         const y2 = ay - arrowLength * Math.sin(psi + arrowHalfAngle);
         sctx.lineTo(x2, y2);
-
         sctx.closePath();
         sctx.fill();
       }
       sctx.fillStyle = inkColor;
-      sctx.font = 'bold 8px monospace';
+      sctx.font = 'bold 16px monospace';
       sctx.textAlign = 'center';
-      sctx.fillText('20', x, y + 2.5);
-      sctx.font = 'bold 6px monospace';
-      sctx.fillText('PAP', x, y + 9);
+      sctx.fillText('20', x, y + 5);
+      sctx.font = 'bold 12px monospace';
+      sctx.fillText('PAP', x, y + 18);
     };
 
     const activeSymbols = [];
@@ -262,58 +248,104 @@ const useCardboardTextures = (
     if (hasFragile) activeSymbols.push('fragile');
     if (hasUpArrows) activeSymbols.push('upArrows');
 
-    const symbolY = 320;
+    const symbolY = 640;
     if (activeSymbols.length === 1) {
-      if (activeSymbols[0] === 'recycling') drawRecycling(256, symbolY);
-      if (activeSymbols[0] === 'fragile') drawFragile(256, symbolY);
-      if (activeSymbols[0] === 'upArrows') drawUpArrows(256, symbolY);
+      if (activeSymbols[0] === 'recycling') drawRecycling(512, symbolY);
+      if (activeSymbols[0] === 'fragile') drawFragile(512, symbolY);
+      if (activeSymbols[0] === 'upArrows') drawUpArrows(512, symbolY);
     } else if (activeSymbols.length === 2) {
       activeSymbols.forEach((sym, idx) => {
-        const sx = idx === 0 ? 200 : 312;
+        const sx = idx === 0 ? 400 : 624;
         if (sym === 'recycling') drawRecycling(sx, symbolY);
         if (sym === 'fragile') drawFragile(sx, symbolY);
         if (sym === 'upArrows') drawUpArrows(sx, symbolY);
       });
     } else if (activeSymbols.length === 3) {
-      drawRecycling(160, symbolY);
-      drawFragile(256, symbolY);
-      drawUpArrows(352, symbolY);
+      drawRecycling(320, symbolY);
+      drawFragile(512, symbolY);
+      drawUpArrows(704, symbolY);
+    }
+
+    // Logo image rendering with monochromatization
+    if (logoImage) {
+      const aspect = logoImage.width / logoImage.height;
+      let drawW = 240;
+      let drawH = 240 / aspect;
+      if (drawH > 200) {
+        drawH = 200;
+        drawW = 200 * aspect;
+      }
+      const drawX = 512 - drawW / 2;
+      const drawY = 600 - drawH / 2; // Position centered within the bottom half
+
+      try {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = logoImage.width;
+        tempCanvas.height = logoImage.height;
+        const tctx = tempCanvas.getContext('2d');
+        if (tctx) {
+          tctx.drawImage(logoImage, 0, 0);
+          const imgData = tctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+          const data = imgData.data;
+
+          const rInk = parseInt(printColor.slice(1, 3), 16);
+          const gInk = parseInt(printColor.slice(3, 5), 16);
+          const bInk = parseInt(printColor.slice(5, 7), 16);
+
+          for (let i = 0; i < data.length; i += 4) {
+            const r = data[i];
+            const g = data[i+1];
+            const b = data[i+2];
+            const alpha = data[i+3];
+
+            // Grayscale filter
+            const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+            const inkDensity = (255 - gray) / 255;
+
+            data[i] = rInk;
+            data[i+1] = gInk;
+            data[i+2] = bInk;
+            data[i+3] = alpha * inkDensity * 0.90;
+          }
+          tctx.putImageData(imgData, 0, 0);
+          sctx.drawImage(tempCanvas, drawX, drawY, drawW, drawH);
+        }
+      } catch (err) {
+        console.error('Error rendering monochrome logo:', err);
+      }
     }
 
     // Apply flexographic print ink-skipping / fiber knockout effect
-    // We switch back to normal composite mode and overlay tiny base cardboard-colored dots to create rough ink gaps
     sctx.globalCompositeOperation = 'source-over';
     sctx.fillStyle = edgeColor;
-    for (let i = 0; i < 4500; i++) {
-      const x = 50 + Math.random() * 412;
-      const y = 110 + Math.random() * 292;
-      const size = Math.random() * 1.5 + 0.5; // microscopic fiber knockout
+    for (let i = 0; i < 18000; i++) {
+      const x = 100 + Math.random() * 824;
+      const y = 220 + Math.random() * 584;
+      const size = Math.random() * 2 + 0.5;
       sctx.fillRect(x, y, size, size);
     }
 
     const printedTex = new THREE.CanvasTexture(printedCanvas);
     printedTex.colorSpace = THREE.SRGBColorSpace;
-    printedTex.needsUpdate = true; // Force GPU upload
+    printedTex.needsUpdate = true;
 
     // 3. Alpha Map Canvas for Handle Holes
     const alphaCanvas = document.createElement('canvas');
     alphaCanvas.width = 256;
     alphaCanvas.height = 256;
     const actx = alphaCanvas.getContext('2d');
-    if (!actx) return { plainTexture: plainTex, printedTexture: printedTex, alphaTexture: null };
+    if (!actx) return { plainTexture: plainTex, printedTexture: printedTex, alphaTexture: null, bumpTexture: null };
 
-    // Standard panel is fully opaque (white)
     actx.fillStyle = '#ffffff';
     actx.fillRect(0, 0, 256, 256);
 
     if (hasHandle) {
-      // Draw transparent cutout slot (black)
       actx.fillStyle = '#000000';
       const hx = 68;
       const hy = 113;
       const hw = 120;
       const hh = 30;
-      const r = 15; // rounded corner radius
+      const r = 15;
 
       actx.beginPath();
       actx.moveTo(hx + r, hy);
@@ -330,18 +362,63 @@ const useCardboardTextures = (
     }
 
     const alphaTex = new THREE.CanvasTexture(alphaCanvas);
-    alphaTex.needsUpdate = true; // Force GPU upload
-    return { plainTexture: plainTex, printedTexture: printedTex, alphaTexture: alphaTex };
-  }, [material, hasHandle, printColor, printText, hasRecycling, hasFragile, hasUpArrows]);
+    alphaTex.needsUpdate = true;
+
+    // 4. Generate Canvas for Bump Map (Detailed Cardboard Structure)
+    const bumpCanvas = document.createElement('canvas');
+    bumpCanvas.width = 1024;
+    bumpCanvas.height = 1024;
+    const bctx = bumpCanvas.getContext('2d');
+    if (!bctx) return { plainTexture: plainTex, printedTexture: printedTex, alphaTexture: alphaTex, bumpTexture: null };
+
+    // Fill base height (neutral gray - 128)
+    bctx.fillStyle = '#808080';
+    bctx.fillRect(0, 0, 1024, 1024);
+
+    // Corrugation flutes ripples (height sine wave)
+    for (let y = 0; y < 1024; y++) {
+      const ripple = Math.sin((y / 12) * Math.PI * 2) * 8; // Wave frequency of 12px
+      const grayVal = Math.round(128 + ripple);
+      bctx.fillStyle = `rgb(${grayVal}, ${grayVal}, ${grayVal})`;
+      bctx.fillRect(0, y, 1024, 1);
+    }
+
+    // Crease lines (deep pressed-down indentations)
+    bctx.strokeStyle = '#404040';
+    bctx.lineWidth = 16;
+    bctx.strokeRect(0, 0, 1024, 1024);
+
+    // Dashed inner crease lines
+    bctx.strokeStyle = '#585858';
+    bctx.lineWidth = 8;
+    bctx.setLineDash([24, 16]);
+    bctx.strokeRect(16, 16, 992, 992);
+    bctx.setLineDash([]);
+
+    // Paper grain micro height variations
+    for (let i = 0; i < 40000; i++) {
+      const x = Math.random() * 1024;
+      const y = Math.random() * 1024;
+      const offset = Math.round(Math.random() * 16 - 8); // +/- 8 depth variation
+      bctx.fillStyle = offset > 0 ? `rgba(255, 255, 255, ${offset / 255})` : `rgba(0, 0, 0, ${Math.abs(offset) / 255})`;
+      bctx.fillRect(x, y, 1, 1);
+    }
+
+    const bumpTex = new THREE.CanvasTexture(bumpCanvas);
+    bumpTex.needsUpdate = true;
+
+    return { plainTexture: plainTex, printedTexture: printedTex, alphaTexture: alphaTex, bumpTexture: bumpTex };
+  }, [material, hasHandle, printColor, printText, hasRecycling, hasFragile, hasUpArrows, logoImage]);
 };
 
-// Panel component holding geometry, textures, and flaps
+// Panel component holding geometry, textures, bump maps, and flaps
 interface PanelProps {
   width: number;
   height: number;
   thickness: number;
   colorTexture: THREE.CanvasTexture | null;
   alphaTexture: THREE.CanvasTexture | null;
+  bumpTexture: THREE.CanvasTexture | null;
   isGlueTab?: boolean;
 }
 
@@ -351,6 +428,7 @@ const CardboardPanel: React.FC<PanelProps> = ({
   thickness,
   colorTexture,
   alphaTexture,
+  bumpTexture,
   isGlueTab = false,
 }) => {
   return (
@@ -361,9 +439,11 @@ const CardboardPanel: React.FC<PanelProps> = ({
         map={colorTexture || undefined}
         alphaMap={alphaTexture || undefined}
         transparent={!!alphaTexture && !isGlueTab}
-        roughness={0.9}
+        roughness={0.95} // Cardboard is very matte/rough
         metalness={0.0}
         side={THREE.DoubleSide}
+        bumpMap={isGlueTab ? undefined : (bumpTexture || undefined)}
+        bumpScale={0.006} // Subtle tactile surface bumps
       />
     </mesh>
   );
@@ -467,6 +547,278 @@ const BoxStaple = ({ position }: { position: [number, number, number] }) => (
   </mesh>
 );
 
+// Unified assembly of box panels supporting side-by-side 2D and 3D folding structures
+interface BoxAssemblyProps {
+  length: number;
+  width: number;
+  height: number;
+  fefcoCode: string;
+  fWalls: number;
+  fFlaps: number;
+  wallAngle: number;
+  flapAngle: number;
+  frontTexture: THREE.CanvasTexture | null;
+  backTexture: THREE.CanvasTexture | null;
+  sideTexture: THREE.CanvasTexture | null;
+  plainTexture: THREE.CanvasTexture | null;
+  alphaTexture: THREE.CanvasTexture | null;
+  bumpTexture: THREE.CanvasTexture | null;
+  gluing: boolean;
+  stapling: boolean;
+  hasTopFlaps: boolean;
+  topFlapH: number;
+  bottomFlapH: number;
+  t: number;
+}
+
+const BoxAssembly: React.FC<BoxAssemblyProps> = ({
+  length,
+  width,
+  height,
+  fefcoCode,
+  fWalls,
+  fFlaps,
+  wallAngle,
+  flapAngle,
+  frontTexture,
+  backTexture,
+  sideTexture,
+  plainTexture,
+  alphaTexture,
+  bumpTexture,
+  gluing,
+  stapling,
+  hasTopFlaps,
+  topFlapH,
+  bottomFlapH,
+  t,
+}) => {
+  // FEFCO 300 Lid calculations
+  const lidL = length + 0.12;
+  const lidW = width + 0.12;
+  const lidH = 0.35;
+  
+  // Lid positions: when folded (fFlaps = 1), sits on top. When flat, slides to the side out of layout bounds
+  const lidZOffset = (width / 2 + bottomFlapH + lidW / 2 + 0.5) * (1.0 - fFlaps);
+  
+  // Rims on lid fold from horizontal (90 deg relative to lid) inwards to vertical (0 deg relative to lid)
+  const lidFlapAngle = (1.0 - fFlaps) * (Math.PI / 2);
+  
+  // Lid height: sits on box top when closed (fFlaps = 1), lies flat on ground when open (fFlaps = 0)
+  const lidY = (height / 2 + lidH / 2) * fFlaps + (t / 2) * (1.0 - fFlaps);
+
+  return (
+    <group castShadow receiveShadow>
+      {/* 1. FRONT PANEL GROUP (Stationary Anchor) */}
+      <group position={[0, 0, (width / 2) * fWalls]}>
+        <CardboardPanel 
+          width={length} 
+          height={height} 
+          thickness={t} 
+          colorTexture={frontTexture}
+          alphaTexture={null}
+          bumpTexture={bumpTexture}
+        />
+
+        {/* Front Top Flap */}
+        {hasTopFlaps && topFlapH > 0 && (
+          <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
+            <group position={[0, topFlapH / 2, 0]}>
+              <CardboardPanel width={length} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+            </group>
+          </group>
+        )}
+
+        {/* Front Bottom Flap */}
+        {bottomFlapH > 0 && (
+          <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
+            <group position={[0, -bottomFlapH / 2, 0]}>
+              <CardboardPanel width={length} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+            </group>
+          </group>
+        )}
+
+        {/* 2. RIGHT PANEL GROUP (Hinged to right side of Front) */}
+        <group position={[length / 2, 0, 0]} rotation={[0, -wallAngle, 0]}>
+          <group position={[width / 2, 0, 0]}>
+            <CardboardPanel 
+              width={width} 
+              height={height} 
+              thickness={t} 
+              colorTexture={sideTexture}
+              alphaTexture={alphaTexture}
+              bumpTexture={bumpTexture}
+            />
+
+            {/* Right Top Flap */}
+            {hasTopFlaps && topFlapH > 0 && (
+              <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
+                <group position={[0, topFlapH / 2, 0]}>
+                  <CardboardPanel width={width} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+                </group>
+              </group>
+            )}
+
+            {/* Right Bottom Flap */}
+            {bottomFlapH > 0 && (
+              <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
+                <group position={[0, -bottomFlapH / 2, 0]}>
+                  <CardboardPanel width={width} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+                </group>
+              </group>
+            )}
+          </group>
+
+          {/* 3. BACK PANEL GROUP (Hinged to right side of Right) */}
+          <group position={[width, 0, 0]} rotation={[0, -wallAngle, 0]}>
+            <group position={[length / 2, 0, 0]}>
+              <CardboardPanel 
+                width={length} 
+                height={height} 
+                thickness={t} 
+                colorTexture={backTexture}
+                alphaTexture={null}
+                bumpTexture={bumpTexture}
+              />
+
+              {/* Back Top Flap */}
+              {hasTopFlaps && topFlapH > 0 && (
+                <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
+                  <group position={[0, topFlapH / 2, 0]}>
+                    <CardboardPanel width={length} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+                  </group>
+                </group>
+              )}
+
+              {/* Back Bottom Flap */}
+              {bottomFlapH > 0 && (
+                <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
+                  <group position={[0, -bottomFlapH / 2, 0]}>
+                    <CardboardPanel width={length} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+                  </group>
+                </group>
+              )}
+            </group>
+          </group>
+        </group>
+
+        {/* 4. LEFT PANEL GROUP (Hinged to left side of Front) */}
+        <group position={[-length / 2, 0, 0]} rotation={[0, wallAngle, 0]}>
+          <group position={[-width / 2, 0, 0]}>
+            <CardboardPanel 
+              width={width} 
+              height={height} 
+              thickness={t} 
+              colorTexture={sideTexture}
+              alphaTexture={alphaTexture}
+              bumpTexture={bumpTexture}
+            />
+
+            {/* Left Top Flap */}
+            {hasTopFlaps && topFlapH > 0 && (
+              <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
+                <group position={[0, topFlapH / 2, 0]}>
+                  <CardboardPanel width={width} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+                </group>
+              </group>
+            )}
+
+            {/* Left Bottom Flap */}
+            {bottomFlapH > 0 && (
+              <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
+                <group position={[0, -bottomFlapH / 2, 0]}>
+                  <CardboardPanel width={width} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+                </group>
+              </group>
+            )}
+
+            {/* GLUE TAB / CORNER JOINT FLAP */}
+            <group position={[-width / 2, 0, 0]} rotation={[0, -wallAngle, 0]}>
+              <group position={[0.15, 0, 0]}>
+                <CardboardPanel 
+                  width={0.3} 
+                  height={height - 0.1} 
+                  thickness={t - 0.005} 
+                  colorTexture={plainTexture}
+                  alphaTexture={null}
+                  bumpTexture={bumpTexture}
+                  isGlueTab={true}
+                />
+                
+                {/* Adhesive Seam Visual (Glossy Hot-Melt Glue Beads) */}
+                {gluing && (
+                  <group position={[0, 0, t / 2 + 0.004]}>
+                    <mesh position={[0, height * 0.2, 0]}>
+                      <cylinderGeometry args={[0.012, 0.012, height * 0.18, 8]} />
+                      <meshStandardMaterial color="#e5c158" roughness={0.15} metalness={0.0} transparent opacity={0.75} />
+                    </mesh>
+                    <mesh position={[0, 0, 0]}>
+                      <cylinderGeometry args={[0.012, 0.012, height * 0.18, 8]} />
+                      <meshStandardMaterial color="#e5c158" roughness={0.15} metalness={0.0} transparent opacity={0.75} />
+                    </mesh>
+                    <mesh position={[0, -height * 0.2, 0]}>
+                      <cylinderGeometry args={[0.012, 0.012, height * 0.18, 8]} />
+                      <meshStandardMaterial color="#e5c158" roughness={0.15} metalness={0.0} transparent opacity={0.75} />
+                    </mesh>
+                  </group>
+                )}
+              </group>
+            </group>
+
+            {/* Metal Staples along Joint Seam (rendered if stapling enabled) */}
+            {stapling && (
+              <group position={[-width / 2, 0, 0]}>
+                <BoxStaple position={[-0.04, height * 0.3, t]} />
+                <BoxStaple position={[-0.04, height * 0.1, t]} />
+                <BoxStaple position={[-0.04, -height * 0.1, t]} />
+                <BoxStaple position={[-0.04, -height * 0.3, t]} />
+              </group>
+            )}
+          </group>
+        </group>
+      </group>
+
+      {/* --- TELESCOPIC LID (RENDERED ONLY FOR FEFCO 300) --- */}
+      {fefcoCode === '300' && (
+        <group position={[0, lidY, -lidZOffset]}>
+          {/* Lid Top Face (horizontal) */}
+          <group position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]}>
+            <CardboardPanel width={lidL} height={lidW} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+          </group>
+
+          {/* Lid Front Rim Hinge: rotated around local X by lidFlapAngle, centered downwards */}
+          <group position={[0, 0, lidW / 2]} rotation={[-lidFlapAngle, 0, 0]}>
+            <group position={[0, -lidH / 2, 0]}>
+              <CardboardPanel width={lidL} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+            </group>
+          </group>
+
+          {/* Lid Back Rim Hinge: rotated around local X by -lidFlapAngle, centered downwards */}
+          <group position={[0, 0, -lidW / 2]} rotation={[lidFlapAngle, 0, 0]}>
+            <group position={[0, -lidH / 2, 0]}>
+              <CardboardPanel width={lidL} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+            </group>
+          </group>
+
+          {/* Lid Right Rim Hinge: rotated around local Z by -lidFlapAngle, facing sideways */}
+          <group position={[lidL / 2, 0, 0]} rotation={[0, 0, -lidFlapAngle]}>
+            <group position={[0, -lidH / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
+              <CardboardPanel width={lidW} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+            </group>
+          </group>
+
+          {/* Lid Left Rim Hinge: rotated around local Z by lidFlapAngle, facing sideways */}
+          <group position={[-lidL / 2, 0, 0]} rotation={[0, 0, lidFlapAngle]}>
+            <group position={[0, -lidH / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
+              <CardboardPanel width={lidW} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
+            </group>
+          </group>
+        </group>
+      )}
+    </group>
+  );
+};
+
 interface BoxConfigProps {
   length?: number;    // scaled dimensions in decimeters (e.g. 4.0 = 400mm)
   width?: number;
@@ -484,6 +836,8 @@ interface BoxConfigProps {
   hasFragile?: boolean;
   hasUpArrows?: boolean;
   printCoverage?: string;
+  viewMode?: 'box' | 'flat-box';
+  logoUrl?: string;
 }
 
 const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
@@ -503,16 +857,39 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   hasFragile = false,
   hasUpArrows = false,
   printCoverage = 'front',
+  viewMode = 'box',
+  logoUrl = '',
 }) => {
+  // Pre-load custom brand logo image
+  const [logoImage, setLogoImage] = React.useState<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (!logoUrl) {
+      setLogoImage(null);
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.src = logoUrl;
+    img.onload = () => {
+      setLogoImage(img);
+    };
+    img.onerror = () => {
+      console.error('Failed to load custom brand logo image:', logoUrl);
+      setLogoImage(null);
+    };
+  }, [logoUrl]);
+
   // Generate textures once for the entire scene (optimizes rendering)
-  const { plainTexture, printedTexture, alphaTexture } = useCardboardTextures(
+  const { plainTexture, printedTexture, alphaTexture, bumpTexture } = useCardboardTextures(
     material,
     dieCutting,
     printColor,
     printText,
     hasRecycling,
     hasFragile,
-    hasUpArrows
+    hasUpArrows,
+    logoImage
   );
 
   // Define texture mappings based on coverage selection
@@ -550,233 +927,145 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   const wallAngle = (Math.PI / 2) * fWalls;
   const flapAngle = (Math.PI / 2) * fFlaps;
 
-  // Debugging console log to track states
-  console.log('R3F Box config render:', { length, width, height, numericFold, fWalls, fFlaps, flapAngle, fefcoCode });
+  // Auto-rotation idle timers
+  const [autoRotate, setAutoRotate] = React.useState(true);
+  const timerRef = React.useRef<NodeJS.Timeout | null>(null);
 
-  // FEFCO 300 Lid calculations
-  const lidL = length + 0.12;
-  const lidW = width + 0.12;
-  const lidH = 0.35;
-  
-  // Lid positions: when foldPercent is 1, it sits on the box. When flat, it hovers high above the sheet
-  const lidY = height / 2 + 0.05 + (1.0 - numericFold) * 2.0;
-  const lidZ = 0; // Centered on the box when folded
+  const handleInteractionStart = () => {
+    setAutoRotate(false);
+    if (timerRef.current) clearTimeout(timerRef.current);
+  };
+
+  const handleInteractionEnd = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      setAutoRotate(true);
+    }, 6000); // Resume auto-rotate after 6 seconds of idle inactivity
+  };
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   return (
-    <Canvas camera={{ position: [6, 5, 6], fov: 42 }} shadows>
-      <ambientLight intensity={0.7} />
+    <Canvas camera={{ position: [6, 5, 6], fov: 42 }} shadows gl={{ preserveDrawingBuffer: true }}>
+      <ambientLight intensity={0.6} />
+      
+      {/* Dynamic Key Studio Light */}
       <directionalLight 
-        position={[8, 12, 5]} 
-        intensity={0.9} 
+        position={[5, 8, 5]} 
+        intensity={0.8} 
         castShadow 
-        shadow-mapSize={[1024, 1024]} 
+        shadow-mapSize={[2048, 2048]} 
+        shadow-bias={-0.0001}
       />
-      <directionalLight position={[-8, -5, -5]} intensity={0.2} />
+      
+      {/* Studio Fill Light */}
+      <directionalLight position={[-5, 4, -5]} intensity={0.3} />
+      
+      {/* Point highlight for tactile staples/glue gloss */}
+      <pointLight position={[0, 4, 2]} intensity={0.4} />
 
-      <group position={[0, -0.5, 0]}>
-        {/* --- SCENE HIERARCHY FOR PANEL ASSEMBLING --- */}
-        
-        {/* 1. FRONT PANEL GROUP (Stationary Anchor) */}
-        <group position={[0, 0, (width / 2) * fWalls]}>
-          <CardboardPanel 
-            width={length} 
-            height={height} 
-            thickness={t} 
-            colorTexture={frontTexture}
-            alphaTexture={null}
-          />
+      {/* Ground Floor Stage */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -height / 2 - 0.02, 0]} receiveShadow>
+        <planeGeometry args={[50, 50]} />
+        <meshStandardMaterial color="#f7fafc" roughness={0.8} />
+      </mesh>
 
-          {/* Front Top Flap */}
-          {hasTopFlaps && topFlapH > 0 && (
-            <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
-              <group position={[0, topFlapH / 2, 0]}>
-                <CardboardPanel width={length} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-              </group>
-            </group>
-          )}
+      {/* Floor grid overlay matching CRM styling */}
+      <gridHelper args={[30, 30, '#cbd5e0', '#e2e8f0']} position={[0, -height / 2 - 0.015, 0]} />
 
-          {/* Front Bottom Flap */}
-          {bottomFlapH > 0 && (
-            <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
-              <group position={[0, -bottomFlapH / 2, 0]}>
-                <CardboardPanel width={length} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-              </group>
-            </group>
-          )}
-
-          {/* 2. RIGHT PANEL GROUP (Hinged to right side of Front) */}
-          <group position={[length / 2, 0, 0]} rotation={[0, -wallAngle, 0]}>
-            <group position={[width / 2, 0, 0]}>
-              <CardboardPanel 
-                width={width} 
-                height={height} 
-                thickness={t} 
-                colorTexture={sideTexture}
-                alphaTexture={alphaTexture}
-              />
-
-              {/* Right Top Flap (centered along the Right Panel width at local x = width/2) */}
-              {hasTopFlaps && topFlapH > 0 && (
-                <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
-                  <group position={[0, topFlapH / 2, 0]}>
-                    <CardboardPanel width={width} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-                  </group>
-                </group>
-              )}
-
-              {/* Right Bottom Flap */}
-              {bottomFlapH > 0 && (
-                <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
-                  <group position={[0, -bottomFlapH / 2, 0]}>
-                    <CardboardPanel width={width} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-                  </group>
-                </group>
-              )}
-            </group>
-
-            {/* 3. BACK PANEL GROUP (Hinged to right side of Right) */}
-            <group position={[width, 0, 0]} rotation={[0, -wallAngle, 0]}>
-              <group position={[length / 2, 0, 0]}>
-                <CardboardPanel 
-                  width={length} 
-                  height={height} 
-                  thickness={t} 
-                  colorTexture={backTexture}
-                  alphaTexture={null}
-                />
-
-                {/* Back Top Flap */}
-                {hasTopFlaps && topFlapH > 0 && (
-                  <group position={[0, height / 2, 0]} rotation={[flapAngle, 0, 0]}>
-                    <group position={[0, topFlapH / 2, 0]}>
-                      <CardboardPanel width={length} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-                    </group>
-                  </group>
-                )}
-
-                {/* Back Bottom Flap */}
-                {bottomFlapH > 0 && (
-                  <group position={[0, -height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
-                    <group position={[0, -bottomFlapH / 2, 0]}>
-                      <CardboardPanel width={length} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-                    </group>
-                  </group>
-                )}
-              </group>
-            </group>
+      <group position={[0, -0.2, 0]}>
+        {/* VIEWMODE: SINGLE 3D BOX VIEW */}
+        {viewMode === 'box' && (
+          <group position={[0, 0, 0]}>
+            <BoxAssembly 
+              length={length}
+              width={width}
+              height={height}
+              fefcoCode={fefcoCode}
+              fWalls={fWalls}
+              fFlaps={fFlaps}
+              wallAngle={wallAngle}
+              flapAngle={flapAngle}
+              frontTexture={frontTexture}
+              backTexture={backTexture}
+              sideTexture={sideTexture}
+              plainTexture={plainTexture}
+              alphaTexture={alphaTexture}
+              bumpTexture={bumpTexture}
+              gluing={gluing}
+              stapling={stapling}
+              hasTopFlaps={hasTopFlaps}
+              topFlapH={topFlapH}
+              bottomFlapH={bottomFlapH}
+              t={t}
+            />
           </group>
+        )}
 
-          {/* 4. LEFT PANEL GROUP (Hinged to left side of Front) */}
-          <group position={[-length / 2, 0, 0]} rotation={[0, wallAngle, 0]}>
-            <group position={[-width / 2, 0, 0]}>
-              <CardboardPanel 
-                width={width} 
-                height={height} 
-                thickness={t} 
-                colorTexture={sideTexture}
+        {/* VIEWMODE: 2D FLAT PATTERN & 3D BOX SIDE-BY-SIDE */}
+        {viewMode === 'flat-box' && (
+          <group>
+            {/* 2D Flat Sheet Layout (positioned on the left, rotated flat on the ground) */}
+            <group position={[-length - 0.8, -height / 2 + 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+              <BoxAssembly 
+                length={length}
+                width={width}
+                height={height}
+                fefcoCode={fefcoCode}
+                fWalls={0}
+                fFlaps={0}
+                wallAngle={0}
+                flapAngle={0}
+                frontTexture={frontTexture}
+                backTexture={backTexture}
+                sideTexture={sideTexture}
+                plainTexture={plainTexture}
                 alphaTexture={alphaTexture}
+                bumpTexture={bumpTexture}
+                gluing={gluing}
+                stapling={stapling}
+                hasTopFlaps={hasTopFlaps}
+                topFlapH={topFlapH}
+                bottomFlapH={bottomFlapH}
+                t={t}
               />
-
-              {/* Left Top Flap (centered along the Left Panel width at local x = -width/2) */}
-              {hasTopFlaps && topFlapH > 0 && (
-                <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
-                  <group position={[0, topFlapH / 2, 0]}>
-                    <CardboardPanel width={width} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-                  </group>
-                </group>
-              )}
-
-              {/* Left Bottom Flap */}
-              {bottomFlapH > 0 && (
-                <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
-                  <group position={[0, -bottomFlapH / 2, 0]}>
-                    <CardboardPanel width={width} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-                  </group>
-                </group>
-              )}
-
-              {/* GLUE TAB / CORNER JOINT JOINT FLAP */}
-              <group position={[-width / 2, 0, 0]} rotation={[0, -wallAngle, 0]}>
-                <group position={[0.15, 0, 0]}>
-                  <CardboardPanel 
-                    width={0.3} 
-                    height={height - 0.1} 
-                    thickness={t - 0.005} 
-                    colorTexture={plainTexture}
-                    alphaTexture={null}
-                    isGlueTab={true}
-                  />
-                  
-                  {/* Adhesive Seam Visual (Glossy Hot-Melt Glue Beads) */}
-                  {gluing && (
-                    <group position={[0, 0, t / 2 + 0.004]}>
-                      {/* Top Bead */}
-                      <mesh position={[0, height * 0.2, 0]}>
-                        <cylinderGeometry args={[0.012, 0.012, height * 0.18, 8]} />
-                        <meshStandardMaterial color="#e5c158" roughness={0.15} metalness={0.0} transparent opacity={0.75} />
-                      </mesh>
-                      {/* Middle Bead */}
-                      <mesh position={[0, 0, 0]}>
-                        <cylinderGeometry args={[0.012, 0.012, height * 0.18, 8]} />
-                        <meshStandardMaterial color="#e5c158" roughness={0.15} metalness={0.0} transparent opacity={0.75} />
-                      </mesh>
-                      {/* Bottom Bead */}
-                      <mesh position={[0, -height * 0.2, 0]}>
-                        <cylinderGeometry args={[0.012, 0.012, height * 0.18, 8]} />
-                        <meshStandardMaterial color="#e5c158" roughness={0.15} metalness={0.0} transparent opacity={0.75} />
-                      </mesh>
-                    </group>
-                  )}
-                </group>
-              </group>
-
-              {/* Metal Staples along Joint Seam (rendered if stapling enabled) */}
-              {stapling && (
-                <group position={[-width / 2, 0, 0]}>
-                  <BoxStaple position={[-0.04, height * 0.3, t]} />
-                  <BoxStaple position={[-0.04, height * 0.1, t]} />
-                  <BoxStaple position={[-0.04, -height * 0.1, t]} />
-                  <BoxStaple position={[-0.04, -height * 0.3, t]} />
-                </group>
-              )}
-            </group>
-          </group>
-
-        </group>
-
-        {/* --- TELESCOPIC LID (RENDERED ONLY FOR FEFCO 300) --- */}
-        {fefcoCode === '300' && (
-          <group position={[0, lidY, lidZ]}>
-            {/* Lid Top Face (horizontal) */}
-            <group position={[0, lidH / 2, 0]} rotation={[Math.PI / 2, 0, 0]}>
-              <CardboardPanel width={lidL} height={lidW} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
             </group>
 
-            {/* Lid Front Rim */}
-            <group position={[0, 0, lidW / 2]}>
-              <CardboardPanel width={lidL} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-            </group>
-
-            {/* Lid Back Rim */}
-            <group position={[0, 0, -lidW / 2]}>
-              <CardboardPanel width={lidL} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-            </group>
-
-            {/* Lid Left Rim */}
-            <group position={[-lidL / 2, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
-              <CardboardPanel width={lidW} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
-            </group>
-
-            {/* Lid Right Rim */}
-            <group position={[lidL / 2, 0, 0]} rotation={[0, Math.PI / 2, 0]}>
-              <CardboardPanel width={lidW} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} />
+            {/* 3D Folding Box (positioned on the right) */}
+            <group position={[length / 2 + 0.3, 0, 0]}>
+              <BoxAssembly 
+                length={length}
+                width={width}
+                height={height}
+                fefcoCode={fefcoCode}
+                fWalls={fWalls}
+                fFlaps={fFlaps}
+                wallAngle={wallAngle}
+                flapAngle={flapAngle}
+                frontTexture={frontTexture}
+                backTexture={backTexture}
+                sideTexture={sideTexture}
+                plainTexture={plainTexture}
+                alphaTexture={alphaTexture}
+                bumpTexture={bumpTexture}
+                gluing={gluing}
+                stapling={stapling}
+                hasTopFlaps={hasTopFlaps}
+                topFlapH={topFlapH}
+                bottomFlapH={bottomFlapH}
+                t={t}
+              />
             </group>
           </group>
         )}
 
         {/* --- DYNAMIC DIMENSIONS OVERLAYS --- */}
         {numericFold > 0.05 && (
-          <group>
+          <group position={viewMode === 'flat-box' ? [length / 2 + 0.3, 0, 0] : [0, 0, 0]}>
             {/* Length Dimension Line (Front Bottom) */}
             <DimensionOverlay
               start={[-length / 2, -height / 2, width / 2]}
@@ -807,7 +1096,14 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
         )}
       </group>
 
-      <OrbitControls minDistance={2} maxDistance={15} />
+      <OrbitControls 
+        minDistance={2} 
+        maxDistance={15} 
+        autoRotate={autoRotate} 
+        autoRotateSpeed={0.8}
+        onStart={handleInteractionStart}
+        onEnd={handleInteractionEnd}
+      />
     </Canvas>
   );
 };

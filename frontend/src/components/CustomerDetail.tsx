@@ -37,11 +37,13 @@ const CustomerDetail: React.FC<CustomerDetailProps> = ({ customer, onBack }) => 
   const [quotes, setQuotes] = useState<any[]>([]);
   const [loadingQuotes, setLoadingQuotes] = useState(true);
   const [isQuoteModalOpen, setIsQuoteModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'profile' | 'metrics'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'metrics' | 'claims'>('profile');
   const [metrics, setMetrics] = useState<any>(null);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
   const [selectedInterval, setSelectedInterval] = useState<'1m' | '2m' | '3m' | '6m' | '12m'>('12m');
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
+  const [customerClaims, setCustomerClaims] = useState<any[]>([]);
+  const [loadingClaims, setLoadingClaims] = useState(false);
   const { t } = useI18n();
 
   useEffect(() => {
@@ -82,7 +84,28 @@ const CustomerDetail: React.FC<CustomerDetailProps> = ({ customer, onBack }) => 
 
   useEffect(() => {
     fetchCustomerQuotes();
+    setCustomerClaims([]);
   }, [customer.id]);
+
+  useEffect(() => {
+    if (activeTab === 'claims' && customerClaims.length === 0 && !loadingClaims) {
+      setLoadingClaims(true);
+      const token = localStorage.getItem('vnc_token');
+      fetch('/vnc-crm/api/claims', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      })
+        .then(res => res.json())
+        .then(data => {
+          const filtered = (data || []).filter((c: any) => c.customer_id === customer.id);
+          setCustomerClaims(filtered);
+          setLoadingClaims(false);
+        })
+        .catch(err => {
+          console.error('Failed to load customer claims', err);
+          setLoadingClaims(false);
+        });
+    }
+  }, [activeTab, customer.id, customerClaims, loadingClaims]);
 
   const getStatusTranslation = (statusStr: string) => {
     switch (statusStr.toLowerCase()) {
@@ -170,6 +193,22 @@ const CustomerDetail: React.FC<CustomerDetailProps> = ({ customer, onBack }) => 
           }}
         >
           {t('performance_metrics')}
+        </button>
+        <button
+          onClick={() => setActiveTab('claims')}
+          style={{
+            padding: '10px 20px',
+            border: 'none',
+            background: 'none',
+            borderBottom: activeTab === 'claims' ? '3px solid var(--primary-color)' : '3px solid transparent',
+            color: activeTab === 'claims' ? 'var(--primary-color)' : 'var(--text-muted)',
+            fontWeight: 600,
+            cursor: 'pointer',
+            fontSize: '0.95rem',
+            transition: 'all 0.2s'
+          }}
+        >
+          {t('qa_claims')}
         </button>
       </div>
 
@@ -355,7 +394,7 @@ const CustomerDetail: React.FC<CustomerDetailProps> = ({ customer, onBack }) => 
           </div>
 
         </div>
-      ) : (
+      ) : activeTab === 'metrics' ? (
         /* Performance Metrics Dashboard Layout */
         <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
           
@@ -731,6 +770,68 @@ const CustomerDetail: React.FC<CustomerDetailProps> = ({ customer, onBack }) => 
             );
           })()}
 
+        </div>
+      ) : (
+        <div className="card" style={{ padding: '25px' }}>
+          <h4 style={{ margin: '0 0 20px 0', color: 'var(--secondary-color)', fontSize: '1.05rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '8px' }}>
+            {t('rma_quality_claims')}
+          </h4>
+          {loadingClaims ? (
+            <div style={{ padding: '20px', color: 'var(--text-muted)' }}>{t('loading')}</div>
+          ) : customerClaims.length === 0 ? (
+            <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', border: '1px dashed var(--border-color)', borderRadius: '8px' }}>
+              No claims or quality complaints registered for this customer.
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.9rem' }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid #f0f0f0', color: 'var(--text-muted)', fontWeight: 600 }}>
+                    <th style={{ padding: '12px 15px' }}>Claim ID</th>
+                    <th style={{ padding: '12px 15px' }}>Batch ID</th>
+                    <th style={{ padding: '12px 15px' }}>Category</th>
+                    <th style={{ padding: '12px 15px' }}>Details</th>
+                    <th style={{ padding: '12px 15px' }}>Status</th>
+                    <th style={{ padding: '12px 15px' }}>Decision</th>
+                    <th style={{ padding: '12px 15px' }}>Credit Note Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {customerClaims.map((claim) => (
+                    <tr key={claim.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                      <td style={{ padding: '12px 15px', fontWeight: 'bold' }}>RMA #{claim.id}</td>
+                      <td style={{ padding: '12px 15px' }}>{claim.batch_id || '-'}</td>
+                      <td style={{ padding: '12px 15px' }}>
+                        <span style={{ backgroundColor: '#f1f5f9', padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 600 }}>
+                          {claim.root_cause_category || 'General'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '12px 15px' }}>
+                        <div style={{ fontWeight: 600 }}>{claim.root_cause_details}</div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{claim.description}</div>
+                      </td>
+                      <td style={{ padding: '12px 15px' }}>
+                        <span style={{ 
+                          padding: '2px 8px', 
+                          borderRadius: '12px', 
+                          fontWeight: 600, 
+                          fontSize: '0.75rem',
+                          backgroundColor: ['Credit Issued', 'Replacement Queued'].includes(claim.status) ? '#e6f7ed' : claim.status === 'Rejected' ? '#fff0f6' : '#fffbe6',
+                          color: ['Credit Issued', 'Replacement Queued'].includes(claim.status) ? '#2e7d32' : claim.status === 'Rejected' ? '#c41d7f' : '#faad14'
+                        }}>
+                          {claim.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: '12px 15px', fontWeight: '600' }}>{claim.resolution_decision || '-'}</td>
+                      <td style={{ padding: '12px 15px', fontWeight: 'bold', color: claim.credit_note_amount > 0 ? '#c53030' : 'inherit' }}>
+                        {claim.credit_note_amount > 0 ? `${claim.credit_note_amount.toFixed(2)} RON` : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 

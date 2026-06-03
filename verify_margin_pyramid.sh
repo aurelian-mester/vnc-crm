@@ -64,13 +64,13 @@ QUOTE_5_PCT='{
       "product_id": "",
       "description": "Custom Box 5% Margin",
       "quantity": 1000,
-      "unit_price": 0.3287,
+      "unit_price": 0.5175,
       "config_params": "{\"length\":400,\"width\":300,\"height\":200,\"quantity\":1000,\"material\":\"Testliner\",\"printing\":false,\"dieCutting\":false,\"gluing\":true,\"stapling\":false}"
     }
   ]
 }'
 
-# Custom item with 15% margin (price = 0.3673, cost = 0.3122)
+# Custom item with 15% margin (price = 0.5784, cost = 0.4916)
 QUOTE_15_PCT='{
   "customer_id": "C000803",
   "status": "Draft",
@@ -79,7 +79,7 @@ QUOTE_15_PCT='{
       "product_id": "",
       "description": "Custom Box 15% Margin",
       "quantity": 1000,
-      "unit_price": 0.3673,
+      "unit_price": 0.5784,
       "config_params": "{\"length\":400,\"width\":300,\"height\":200,\"quantity\":1000,\"material\":\"Testliner\",\"printing\":false,\"dieCutting\":false,\"gluing\":true,\"stapling\":false}"
     }
   ]
