@@ -12,9 +12,53 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 	_ "github.com/lib/pq"
 )
+
+var jwtKey = []byte("vnc-crm-secret-key-2026")
+
+// claimsFromToken validates the request's Bearer JWT (HS256 + signature + expiry).
+func claimsFromToken(r *http.Request) (jwt.MapClaims, error) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return nil, fmt.Errorf("no authorization header")
+	}
+	parts := strings.Split(authHeader, " ")
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return nil, fmt.Errorf("invalid authorization header format")
+	}
+	token, err := jwt.Parse(parts[1], func(token *jwt.Token) (interface{}, error) {
+		return jwtKey, nil
+	}, jwt.WithValidMethods([]string{"HS256"}))
+	if err != nil || !token.Valid {
+		return nil, fmt.Errorf("invalid token: %v", err)
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("invalid token claims")
+	}
+	return claims, nil
+}
+
+func claimStr(claims jwt.MapClaims, key string) string {
+	if v, ok := claims[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// authorize requires a valid JWT (any authenticated user) and returns its claims.
+// On failure it writes 401 and returns ok=false.
+func authorize(w http.ResponseWriter, r *http.Request) (jwt.MapClaims, bool) {
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return nil, false
+	}
+	return claims, true
+}
 
 type Product struct {
 	ID          string  `json:"id"`
@@ -97,9 +141,18 @@ func main() {
 
 func handleGetProducts(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	claims, ok := authorize(w, r)
+	if !ok {
+		return
+	}
 	search := r.URL.Query().Get("search")
 	customerID := r.URL.Query().Get("customer_id")
 	category := r.URL.Query().Get("category") // 'articles', 'board_grades', or 'all'
+
+	// External (B2B) users may only see their own customer's negotiated pricing.
+	if claimStr(claims, "role") == "external" {
+		customerID = claimStr(claims, "customer_id")
+	}
 
 	if category == "" {
 		category = "articles"
@@ -443,6 +496,9 @@ func calculatePricingDetails(req CalculationRequest, q int) (materialPrice, setu
 }
 
 func handleCalculate(w http.ResponseWriter, r *http.Request) {
+	if _, ok := authorize(w, r); !ok {
+		return
+	}
 	var req CalculationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -676,6 +732,9 @@ type SpecsResponse struct {
 
 func handleGetSpecs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r); !ok {
+		return
+	}
 	var req SpecsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
