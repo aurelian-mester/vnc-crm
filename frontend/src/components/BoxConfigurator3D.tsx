@@ -923,8 +923,9 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
     }
   }, [fefcoCode, width]);
 
-  // Hinge angles
-  const wallAngle = (Math.PI / 2) * fWalls;
+  // Hinge angles. Walls hinge inward (negative Y rotation) so the side/back
+  // panels wrap into a closed box instead of splaying outward.
+  const wallAngle = -(Math.PI / 2) * fWalls;
   const flapAngle = (Math.PI / 2) * fFlaps;
 
   // Auto-rotation idle timers
