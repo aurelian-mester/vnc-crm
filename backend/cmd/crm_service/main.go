@@ -323,6 +323,9 @@ var logisticsRoles = map[string]bool{"admin": true, "sales": true, "asm": true, 
 // managerRoles may act across other salespeople's records (no ownership scoping).
 var managerRoles = map[string]bool{"admin": true, "management": true, "sales_manager": true, "rsm": true}
 
+// qaRoles: QA & Claims access (matches the Sidebar). Plus "external" customers see their own.
+var qaRoles = map[string]bool{"admin": true, "quality": true, "management": true, "sales": true}
+
 // claimStr safely reads a string claim without panicking on a missing/non-string value.
 func claimStr(claims jwt.MapClaims, key string) string {
 	if v, ok := claims[key].(string); ok {
@@ -1932,6 +1935,9 @@ func handleGetCustomerMetrics(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Forbidden: Access restricted", http.StatusForbidden)
 			return
 		}
+	} else if !salesRoles[role] {
+		http.Error(w, "Forbidden: insufficient role", http.StatusForbidden)
+		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -2271,10 +2277,15 @@ func handleGetClaims(w http.ResponseWriter, r *http.Request) {
 	role := claims["role"].(string)
 	customerIDClaim, _ := claims["customer_id"].(string)
 
+	if role != "external" && !qaRoles[role] {
+		http.Error(w, "Forbidden: insufficient role", http.StatusForbidden)
+		return
+	}
+
 	query := `
-		SELECT c.id, c.customer_id, cust.name as customer_name, c.quote_id, c.batch_id, 
-		       c.root_cause_category, c.root_cause_details, c.status, c.description, 
-		       c.resolution_decision, c.credit_note_amount, c.replacement_quote_id, 
+		SELECT c.id, c.customer_id, cust.name as customer_name, c.quote_id, c.batch_id,
+		       c.root_cause_category, c.root_cause_details, c.status, c.description,
+		       c.resolution_decision, c.credit_note_amount, c.replacement_quote_id,
 		       c.created_at, c.updated_at
 		FROM claims c
 		JOIN customers cust ON cust.id = c.customer_id
@@ -2360,6 +2371,11 @@ func handleGetClaimDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	role := claims["role"].(string)
 	customerIDClaim, _ := claims["customer_id"].(string)
+
+	if role != "external" && !qaRoles[role] {
+		http.Error(w, "Forbidden: insufficient role", http.StatusForbidden)
+		return
+	}
 
 	vars := mux.Vars(r)
 	id, _ := strconv.Atoi(vars["id"])
