@@ -116,6 +116,15 @@ const ProductConfigurator: React.FC = () => {
   const [hoveredTierIdx, setHoveredTierIdx] = useState<number | null>(null);
   const [quoteSuccessMsg, setQuoteSuccessMsg] = useState<string | null>(null);
 
+  // Target sales margin (%) that derives the quoted price from cost (margin
+  // pyramid). Replaces the old straight discount: the salesperson picks a
+  // margin within their role-allowed band.
+  const [targetMargin, setTargetMargin] = useState<number>(20);
+
+  // Saved configurations (History tab, persisted in the backend).
+  const [savedConfigs, setSavedConfigs] = useState<any[]>([]);
+  const [configName, setConfigName] = useState('');
+
   const handleExportPDF = () => {
     const canvas = document.querySelector('canvas');
     let snapshotUrl = '';
@@ -408,11 +417,11 @@ const ProductConfigurator: React.FC = () => {
     const token = localStorage.getItem('vnc_token');
     fetch('/vnc-crm/api/calculate', {
       method: 'POST',
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify(params)
+      body: JSON.stringify({ ...params, target_margin: targetMargin })
     })
     .then(res => res.json())
     .then(data => setResult(data))
@@ -492,7 +501,7 @@ const ProductConfigurator: React.FC = () => {
   useEffect(() => {
     calculatePrice();
     calculateSpecs();
-  }, [params]);
+  }, [params, targetMargin]);
 
   const handleCustomerChange = (customerId: string) => {
     setSelectedCustomerId(customerId);
@@ -599,6 +608,22 @@ const ProductConfigurator: React.FC = () => {
   const maxM = activeMarginConfig.max_margin;
   const currentMargin = result && result.finalPrice > 0 ? ((result.finalPrice - result.totalCost) / result.finalPrice * 100) : 0;
   const isViolation = !!(result && canSeeMargins && (currentMargin < minM || currentMargin > maxM));
+
+  // Slider bounds: clamp the upper margin below 100% so price = cost/(1-m) stays finite.
+  const marginSliderMin = minM;
+  const marginSliderMax = Math.min(maxM, 90);
+
+  // Initialize the target margin within the role's band once margins load.
+  // Sales roles default to their max (list price) and can slide down toward
+  // their floor to discount; roles without margin visibility get a fixed 20%.
+  useEffect(() => {
+    if (canSeeMargins) {
+      setTargetMargin(Math.max(marginSliderMin, Math.min(marginSliderMax, 20)));
+    } else {
+      setTargetMargin(20);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [margins, role]);
 
   return (
     <div className="card">
@@ -1676,10 +1701,28 @@ const ProductConfigurator: React.FC = () => {
                 )}
               </div>
 
-              <div style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
-                <label style={{ fontSize: '0.8rem', color: '#666', display: 'block', marginBottom: '4px' }}>{t('applied_discount')}</label>
-                <input type="number" value={params.discount} onChange={e => setParams({...params, discount: Number(e.target.value)})} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px', boxSizing: 'border-box' }} />
-              </div>
+              {canSeeMargins && (
+                <div style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '6px' }}>
+                    <label style={{ fontSize: '0.8rem', color: '#666', fontWeight: 600 }}>{t('target_sales_margin')}</label>
+                    <span style={{ fontSize: '0.95rem', fontWeight: 'bold', color: isViolation ? '#e74c3c' : 'var(--accent-color)' }}>{targetMargin.toFixed(1)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={marginSliderMin}
+                    max={marginSliderMax}
+                    step={0.5}
+                    value={targetMargin}
+                    onChange={e => setTargetMargin(Number(e.target.value))}
+                    style={{ width: '100%', accentColor: 'var(--kraft-accent)', cursor: 'pointer' }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#999', marginTop: '2px' }}>
+                    <span>{marginSliderMin.toFixed(0)}%</span>
+                    <span>{locale === 'ro' ? 'Interval permis pe rol' : 'Role-allowed band'}</span>
+                    <span>{marginSliderMax.toFixed(0)}%</span>
+                  </div>
+                </div>
+              )}
 
               <div style={{ marginTop: '20px', borderTop: '1px solid #eee', paddingTop: '20px' }}>
                 <label style={{ fontSize: '0.8rem', color: '#666', display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>

@@ -90,7 +90,8 @@ type CalculationRequest struct {
 	DieCutting                bool    `json:"dieCutting"`
 	Gluing                    bool    `json:"gluing"`
 	Stapling                  bool    `json:"stapling"`
-	Discount                  float64 `json:"discount"` // Percentage
+	Discount                  float64 `json:"discount"`      // Percentage (legacy; superseded by TargetMargin)
+	TargetMargin              float64 `json:"target_margin"` // Sales margin % used to derive price from cost (margin pyramid)
 	CustomerPriceGroup        string  `json:"customer_price_group"`
 	CustomerID                string  `json:"customer_id"`
 	ToolingPrintingPlatesCost float64 `json:"tooling_printing_plates_cost"`
@@ -499,9 +500,18 @@ func calculatePricingDetails(req CalculationRequest, q int) (materialPrice, setu
 		toolingCost = 0.0
 	}
 
+	// totalPrice here is the true production cost (material + conversion + tooling).
 	totalPrice = materialPrice + setupCost + runCost + toolingCost
-	discountAmount := totalPrice * (req.Discount / 100.0)
-	finalPrice = totalPrice - discountAmount
+
+	// Derive the sales price from cost using the role-bounded target margin
+	// (margin pyramid): price = cost / (1 - margin). Clamp the denominator so a
+	// margin approaching 100% cannot divide by zero or explode.
+	marginFrac := req.TargetMargin / 100.0
+	denom := 1.0 - marginFrac
+	if denom < 0.05 {
+		denom = 0.05
+	}
+	finalPrice = totalPrice / denom
 	unitPrice = finalPrice / float64(q)
 
 	return materialPrice, setupCost, runCost, toolingCost, totalPrice, finalPrice, unitPrice
@@ -568,14 +578,14 @@ func handleCalculate(w http.ResponseWriter, r *http.Request) {
 	quantityTiers := getQuantityTiers(req.Quantity)
 	tiers := make([]PriceTier, len(quantityTiers))
 	for i, q := range quantityTiers {
-		mPrice, sCost, rCost, tCost, tPrice, fPrice, uPrice := calculatePricingDetails(req, q)
+		mPrice, sCost, rCost, tCost, tCost2, fPrice, uPrice := calculatePricingDetails(req, q)
 		tiers[i] = PriceTier{
 			Quantity:    q,
 			BaseCost:    mPrice,
 			SetupCost:   sCost,
 			RunCost:     rCost,
 			ToolingCost: tCost,
-			TotalCost:   tPrice * 0.7, // 70% production cost
+			TotalCost:   tCost2, // true production cost
 			FinalPrice:  fPrice,
 			UnitPrice:   uPrice,
 		}
@@ -586,7 +596,7 @@ func handleCalculate(w http.ResponseWriter, r *http.Request) {
 		OperationCost: setupCost + runCost,
 		SetupCost:     setupCost,
 		RunCost:       runCost,
-		TotalCost:     totalPrice * 0.7, // 70% production cost (for margins validation)
+		TotalCost:     totalPrice, // true production cost (drives real margin computation)
 		FinalPrice:    finalPrice,
 		UnitPrice:     unitPrice,
 		Tiers:         tiers,
