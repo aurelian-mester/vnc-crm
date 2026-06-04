@@ -140,6 +140,14 @@ func initDB() {
 				items TEXT,
 				UNIQUE(quote_id, version)
 			);
+			CREATE TABLE IF NOT EXISTS box_configs (
+				id SERIAL PRIMARY KEY,
+				name VARCHAR(255) NOT NULL,
+				config TEXT NOT NULL,
+				created_by VARCHAR(255),
+				salesperson_code VARCHAR(50),
+				created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			);
 			CREATE TABLE IF NOT EXISTS leads (
 				id SERIAL PRIMARY KEY,
 				name VARCHAR(255) NOT NULL,
@@ -370,6 +378,11 @@ func main() {
 	r.HandleFunc("/quotes/{id}/versions", handleGetQuoteVersions).Methods("GET")
 	r.HandleFunc("/quotes/{id}/versions/{version}/restore", handleRestoreQuoteVersion).Methods("POST")
 	r.HandleFunc("/production/jobs", handleGetProductionJobs).Methods("GET")
+
+	// Saved box-configurator configurations (History tab)
+	r.HandleFunc("/box-configs", handleGetBoxConfigs).Methods("GET")
+	r.HandleFunc("/box-configs", handleSaveBoxConfig).Methods("POST")
+	r.HandleFunc("/box-configs/{id}", handleDeleteBoxConfig).Methods("DELETE")
 
 	// Leads, Opportunities and Projects workflow endpoints
 	r.HandleFunc("/leads", handleGetLeads).Methods("GET")
@@ -1578,6 +1591,130 @@ func handleGetLeads(w http.ResponseWriter, r *http.Request) {
 	}
 	if list == nil { list = []Lead{} }
 	json.NewEncoder(w).Encode(list)
+}
+
+// BoxConfig is a saved configurator state (params + print settings) stored for
+// the History tab. Config holds an opaque JSON blob produced by the frontend.
+type BoxConfig struct {
+	ID              int       `json:"id"`
+	Name            string    `json:"name"`
+	Config          string    `json:"config"`
+	CreatedBy       string    `json:"created_by"`
+	SalespersonCode string    `json:"salesperson_code"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// handleGetBoxConfigs lists saved configurations. Admins/management see all;
+// everyone else sees only the ones they saved.
+func handleGetBoxConfigs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, ok := authorize(w, r, nil)
+	if !ok {
+		return
+	}
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+	role := claimStr(claims, "role")
+	email := claimStr(claims, "email")
+
+	var rows *sql.Rows
+	var err error
+	if role == "admin" || role == "management" {
+		rows, err = db.Query(`SELECT id, name, config, created_by, salesperson_code, created_at FROM box_configs ORDER BY created_at DESC LIMIT 100`)
+	} else {
+		rows, err = db.Query(`SELECT id, name, config, created_by, salesperson_code, created_at FROM box_configs WHERE created_by = $1 ORDER BY created_at DESC LIMIT 100`, email)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	configs := []BoxConfig{}
+	for rows.Next() {
+		var c BoxConfig
+		var createdBy, sp sql.NullString
+		if err := rows.Scan(&c.ID, &c.Name, &c.Config, &createdBy, &sp, &c.CreatedAt); err == nil {
+			c.CreatedBy = createdBy.String
+			c.SalespersonCode = sp.String
+			configs = append(configs, c)
+		}
+	}
+	json.NewEncoder(w).Encode(configs)
+}
+
+// handleSaveBoxConfig persists the current configurator state under a name.
+func handleSaveBoxConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, ok := authorize(w, r, nil)
+	if !ok {
+		return
+	}
+	var req BoxConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		req.Name = "Untitled configuration"
+	}
+	if strings.TrimSpace(req.Config) == "" {
+		http.Error(w, "config is required", http.StatusBadRequest)
+		return
+	}
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+	createdBy := claimStr(claims, "email")
+	if createdBy == "" {
+		createdBy = claimStr(claims, "name")
+	}
+	sp := claimStr(claims, "salesperson_code")
+
+	err := db.QueryRow(`
+		INSERT INTO box_configs (name, config, created_by, salesperson_code)
+		VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+		req.Name, req.Config, createdBy, sp,
+	).Scan(&req.ID, &req.CreatedAt)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.CreatedBy = createdBy
+	req.SalespersonCode = sp
+	json.NewEncoder(w).Encode(req)
+}
+
+// handleDeleteBoxConfig removes a saved configuration. Admins/management may
+// delete any; others only their own.
+func handleDeleteBoxConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	claims, ok := authorize(w, r, nil)
+	if !ok {
+		return
+	}
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+	id, _ := strconv.Atoi(mux.Vars(r)["id"])
+	role := claimStr(claims, "role")
+	email := claimStr(claims, "email")
+
+	var err error
+	if role == "admin" || role == "management" {
+		_, err = db.Exec(`DELETE FROM box_configs WHERE id = $1`, id)
+	} else {
+		_, err = db.Exec(`DELETE FROM box_configs WHERE id = $1 AND created_by = $2`, id, email)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Write([]byte(`{"status":"success"}`))
 }
 
 func handleCreateLead(w http.ResponseWriter, r *http.Request) {

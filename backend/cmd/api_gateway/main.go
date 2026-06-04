@@ -80,7 +80,7 @@ func main() {
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/auth"):
 			target = authServiceURL
-		case strings.HasPrefix(r.URL.Path, "/customers") || strings.HasPrefix(r.URL.Path, "/quotes") || strings.HasPrefix(r.URL.Path, "/production") || strings.HasPrefix(r.URL.Path, "/leads") || strings.HasPrefix(r.URL.Path, "/opportunities") || strings.HasPrefix(r.URL.Path, "/projects") || strings.HasPrefix(r.URL.Path, "/lab-tests") || strings.HasPrefix(r.URL.Path, "/claims") || strings.HasPrefix(r.URL.Path, "/quality-config") || strings.HasPrefix(r.URL.Path, "/logistics"):
+		case strings.HasPrefix(r.URL.Path, "/customers") || strings.HasPrefix(r.URL.Path, "/quotes") || strings.HasPrefix(r.URL.Path, "/production") || strings.HasPrefix(r.URL.Path, "/leads") || strings.HasPrefix(r.URL.Path, "/opportunities") || strings.HasPrefix(r.URL.Path, "/projects") || strings.HasPrefix(r.URL.Path, "/lab-tests") || strings.HasPrefix(r.URL.Path, "/claims") || strings.HasPrefix(r.URL.Path, "/quality-config") || strings.HasPrefix(r.URL.Path, "/logistics") || strings.HasPrefix(r.URL.Path, "/box-configs"):
 			target = crmServiceURL
 		case strings.HasPrefix(r.URL.Path, "/pricing") || strings.HasPrefix(r.URL.Path, "/calculate") || strings.HasPrefix(r.URL.Path, "/products"):
 			target = pricingServiceURL

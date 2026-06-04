@@ -480,7 +480,77 @@ const ProductConfigurator: React.FC = () => {
     .then(res => res.json())
     .then(data => setCustomers(data || []))
     .catch(err => console.error('Failed to fetch customers', err));
+
+    fetchSavedConfigs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const fetchSavedConfigs = () => {
+    const token = localStorage.getItem('vnc_token');
+    fetch('/vnc-crm/api/box-configs', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+      .then(res => (res.ok ? res.json() : []))
+      .then(data => setSavedConfigs(Array.isArray(data) ? data : []))
+      .catch(err => console.error('Failed to fetch saved configs', err));
+  };
+
+  const handleSaveConfig = async () => {
+    const token = localStorage.getItem('vnc_token');
+    const name = configName.trim() ||
+      `FEFCO ${params.fefco_code} ${params.length}x${params.width}x${params.height} ${params.material}`;
+    const config = JSON.stringify({
+      params, printColor, printText, printSymbols, printCoverage, logoUrl, viewMode, foldPercent, targetMargin
+    });
+    try {
+      const res = await fetch('/vnc-crm/api/box-configs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ name, config })
+      });
+      if (!res.ok) throw new Error('save failed');
+      setConfigName('');
+      fetchSavedConfigs();
+    } catch (err) {
+      console.error('Failed to save configuration', err);
+      alert(locale === 'ro' ? 'Eroare la salvarea configurației.' : 'Failed to save configuration.');
+    }
+  };
+
+  const handleLoadConfig = (cfg: any) => {
+    try {
+      const b = JSON.parse(cfg.config);
+      if (b.params) {
+        setParams(b.params);
+        setBaseQuantity(b.params.quantity || 1000);
+      }
+      if (b.printColor !== undefined) setPrintColor(b.printColor);
+      if (b.printText !== undefined) setPrintText(b.printText);
+      if (b.printSymbols) setPrintSymbols(b.printSymbols);
+      if (b.printCoverage) setPrintCoverage(b.printCoverage);
+      if (b.logoUrl !== undefined) setLogoUrl(b.logoUrl);
+      if (b.viewMode) setViewMode(b.viewMode);
+      if (typeof b.foldPercent === 'number') setFoldPercent(b.foldPercent);
+      if (typeof b.targetMargin === 'number') setTargetMargin(b.targetMargin);
+      setActiveTab('3d');
+    } catch (err) {
+      console.error('Failed to load configuration', err);
+    }
+  };
+
+  const handleDeleteConfig = async (id: number) => {
+    const token = localStorage.getItem('vnc_token');
+    try {
+      const res = await fetch(`/vnc-crm/api/box-configs/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('delete failed');
+      fetchSavedConfigs();
+    } catch (err) {
+      console.error('Failed to delete configuration', err);
+    }
+  };
 
   // Update base quantity in checked tiers when base quantity changes
   useEffect(() => {
@@ -1415,7 +1485,75 @@ const ProductConfigurator: React.FC = () => {
               )}
             </div>
           )}
-          {activeTab === 'history' && <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>{t('placeholder_history')}</div>}
+          {activeTab === 'history' && (
+            <div style={{ padding: '20px' }}>
+              <h3 style={{ margin: '0 0 20px 0', color: 'var(--secondary-color)', fontWeight: 600 }}>{t('recent_versions')}</h3>
+
+              {/* Save current configuration */}
+              <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  value={configName}
+                  onChange={e => setConfigName(e.target.value)}
+                  placeholder={locale === 'ro' ? 'Nume configurație (opțional)' : 'Configuration name (optional)'}
+                  style={{ flex: 1, minWidth: '220px', padding: '10px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9rem' }}
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveConfig}
+                  style={{ padding: '10px 18px', fontWeight: 'bold', backgroundColor: 'var(--kraft-accent)', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+                >
+                  💾 {locale === 'ro' ? 'Salvează Configurația Curentă' : 'Save Current Configuration'}
+                </button>
+              </div>
+
+              {savedConfigs.length === 0 ? (
+                <div style={{ padding: '40px', textAlign: 'center', color: '#999', border: '1px dashed #e2e8f0', borderRadius: '8px' }}>
+                  {locale === 'ro' ? 'Nicio configurație salvată încă.' : 'No saved configurations yet.'}
+                </div>
+              ) : (
+                <div style={{ border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#f7fafc', textAlign: 'left' }}>
+                        <th style={{ padding: '10px 12px', color: '#4a5568', fontWeight: 600 }}>{locale === 'ro' ? 'Nume' : 'Name'}</th>
+                        <th style={{ padding: '10px 12px', color: '#4a5568', fontWeight: 600 }}>{locale === 'ro' ? 'Salvat de' : 'Saved by'}</th>
+                        <th style={{ padding: '10px 12px', color: '#4a5568', fontWeight: 600 }}>{locale === 'ro' ? 'Data' : 'Date'}</th>
+                        <th style={{ padding: '10px 12px', color: '#4a5568', fontWeight: 600, textAlign: 'right' }}>{locale === 'ro' ? 'Acțiuni' : 'Actions'}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {savedConfigs.map(cfg => (
+                        <tr key={cfg.id} style={{ borderTop: '1px solid #edf2f7' }}>
+                          <td style={{ padding: '10px 12px', fontWeight: 600, color: '#2d3748' }}>{cfg.name}</td>
+                          <td style={{ padding: '10px 12px', color: '#718096' }}>{cfg.created_by || '—'}</td>
+                          <td style={{ padding: '10px 12px', color: '#718096' }}>
+                            {cfg.created_at ? new Date(cfg.created_at).toLocaleString(locale === 'ro' ? 'ro-RO' : 'en-US') : '—'}
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleLoadConfig(cfg)}
+                              style={{ padding: '6px 12px', marginRight: '8px', fontWeight: 'bold', backgroundColor: '#2b6cb0', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
+                            >
+                              {locale === 'ro' ? 'Încarcă' : 'Load'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteConfig(cfg.id)}
+                              style={{ padding: '6px 12px', fontWeight: 'bold', color: '#a82020', backgroundColor: '#fde8e8', border: '1px solid #f8b4b4', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
+                            >
+                              {locale === 'ro' ? 'Șterge' : 'Delete'}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div style={{ width: '380px', padding: '25px', backgroundColor: '#fafafa', borderRadius: '8px' }}>
