@@ -532,7 +532,7 @@ const ProductConfigurator: React.FC = () => {
     }
   };
 
-  const handleCreateQuoteFromTiers = () => {
+  const handleCreateQuoteFromTiers = async () => {
     if (!selectedCustomerId) {
       alert(locale === 'ro' ? 'Vă rugăm să selectați un client mai întâi.' : 'Please select a customer first.');
       return;
@@ -544,13 +544,40 @@ const ProductConfigurator: React.FC = () => {
 
     const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
     const salespersonCode = selectedCustomer?.salesperson_code || 'AM';
+    const token = localStorage.getItem('vnc_token');
+
+    // Materialize a real catalog product for this custom box so the quote lines
+    // reference a concrete product_id instead of an empty string.
+    let customProductId = '';
+    try {
+      const pres = await fetch('/vnc-crm/api/pricing/custom-product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          fefco_code: params.fefco_code,
+          length: params.length,
+          width: params.width,
+          height: params.height,
+          material: params.material,
+          flute_type: params.flute_type
+        })
+      });
+      if (pres.ok) {
+        const pj = await pres.json();
+        customProductId = pj.id || '';
+      } else {
+        console.error('Custom product creation returned', pres.status);
+      }
+    } catch (err) {
+      console.error('Custom product creation failed', err);
+    }
 
     const items = checkedTiers.map(qty => {
       const tier = result?.tiers.find(t => t.quantity === qty);
       const price = tier ? tier.unitPrice : (result?.unitPrice || 0);
-      
+
       return {
-        product_id: '',
+        product_id: customProductId,
         description: `Custom Box FEFCO ${params.fefco_code} (${params.length}x${params.width}x${params.height} mm) ${params.material}`,
         quantity: qty,
         unit_price: price,
@@ -559,10 +586,16 @@ const ProductConfigurator: React.FC = () => {
           width: params.width,
           height: params.height,
           material: params.material,
+          fefco_code: params.fefco_code,
+          flute_type: params.flute_type,
           printing: params.printing,
           dieCutting: params.dieCutting,
           gluing: params.gluing,
-          stapling: params.stapling
+          stapling: params.stapling,
+          tooling_printing_plates_cost: params.tooling_printing_plates_cost,
+          tooling_die_cut_molds_cost: params.tooling_die_cut_molds_cost,
+          tooling_amortization_volume: params.tooling_amortization_volume,
+          amortize_tooling: params.amortize_tooling
         })
       };
     });
@@ -574,32 +607,28 @@ const ProductConfigurator: React.FC = () => {
       items: items
     };
 
-    const token = localStorage.getItem('vnc_token');
-    fetch('/vnc-crm/api/quotes', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify(payload)
-    })
-    .then(res => {
+    try {
+      const res = await fetch('/vnc-crm/api/quotes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
       if (!res.ok) {
-        throw new Error('Failed to create quote');
+        const msg = await res.text().catch(() => '');
+        throw new Error(msg || 'Failed to create quote');
       }
-      return res.json();
-    })
-    .then(() => {
-      setQuoteSuccessMsg(locale === 'ro' 
-        ? 'Ofertă salvată ca schiță în CRM cu volumele selectate!' 
+      setQuoteSuccessMsg(locale === 'ro'
+        ? 'Ofertă salvată ca schiță în CRM cu volumele selectate!'
         : 'Draft quote successfully created in CRM with selected quantity tiers!');
       setCheckedTiers([baseQuantity]);
       setTimeout(() => setQuoteSuccessMsg(null), 8500);
-    })
-    .catch(err => {
+    } catch (err) {
       console.error('Failed to create quote', err);
       alert(locale === 'ro' ? 'Eroare la crearea ofertei.' : 'Failed to create quote.');
-    });
+    }
   };
 
   const canSeeMargins = role === 'admin' || role === 'management' || role === 'sales_manager' || role === 'rsm' || role === 'asm' || role === 'sales' || role === 'ai';

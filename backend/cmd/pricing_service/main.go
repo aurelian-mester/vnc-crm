@@ -147,6 +147,7 @@ func main() {
 	r.HandleFunc("/calculate", handleCalculate).Methods("POST")
 	r.HandleFunc("/products", handleGetProducts).Methods("GET")
 	r.HandleFunc("/pricing/specs", handleGetSpecs).Methods("POST")
+	r.HandleFunc("/pricing/custom-product", handleCustomProduct).Methods("POST")
 
 	log.Println("Pricing Service starting on :8083...")
 	log.Fatal(http.ListenAndServe(":8083", r))
@@ -721,6 +722,74 @@ func getLocalCustomerProducts(customerID, search, category string) ([]Product, e
 		}
 	}
 	return products, nil
+}
+
+// CustomProductRequest describes a configured custom box that should be
+// materialized as a real product record so quote lines can reference it.
+type CustomProductRequest struct {
+	FefcoCode string  `json:"fefco_code"`
+	Length    float64 `json:"length"`
+	Width     float64 `json:"width"`
+	Height    float64 `json:"height"`
+	Material  string  `json:"material"`
+	FluteType string  `json:"flute_type"`
+}
+
+// handleCustomProduct deterministically derives a product code from the box
+// configuration and upserts it into the products catalog, returning the id so
+// the configurator can attach it to quote lines (replacing the empty
+// product_id that custom boxes used to carry).
+func handleCustomProduct(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r); !ok {
+		return
+	}
+	var req CustomProductRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	fefco := strings.ToUpper(strings.TrimSpace(req.FefcoCode))
+	if fefco == "" {
+		fefco = "201"
+	}
+	flute := strings.ToUpper(strings.TrimSpace(req.FluteType))
+	if flute == "" {
+		flute = "B"
+	}
+	mat3 := "GEN"
+	if len(req.Material) >= 3 {
+		mat3 = strings.ToUpper(req.Material[:3])
+	} else if req.Material != "" {
+		mat3 = strings.ToUpper(req.Material)
+	}
+
+	id := fmt.Sprintf("CB-%s-%dX%dX%d-%s-%s", fefco, int(req.Length), int(req.Width), int(req.Height), flute, mat3)
+	if len(id) > 50 {
+		id = id[:50]
+	}
+	desc := fmt.Sprintf("Custom Box FEFCO %s %dx%dx%dmm %s-flute %s", fefco, int(req.Length), int(req.Width), int(req.Height), flute, req.Material)
+	if len(desc) > 255 {
+		desc = desc[:255]
+	}
+
+	if db != nil {
+		// Custom boxes are priced per quote (size/qty/margin dependent), so the
+		// catalog row carries no fixed price; it exists to give quote lines a
+		// real product_id. CO.CUTII = finished boxes category.
+		_, err := db.Exec(`
+			INSERT INTO products (id, description, unit_price, unit_cost, item_category_code)
+			VALUES ($1, $2, 0, 0, 'CO.CUTII')
+			ON CONFLICT (id) DO UPDATE SET description = EXCLUDED.description`,
+			id, desc)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to upsert custom product: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"id": id, "description": desc})
 }
 
 type SpecsRequest struct {
