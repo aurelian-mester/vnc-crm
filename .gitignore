@@ -30,3 +30,9 @@ backend/*.log
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local dev/deploy helper scripts and headless-Chrome verification harnesses
+# (deploy scripts, JWT-minting render/API check scripts). Not part of the app.
+/_*.mjs
+/_*.sh
+/_*.ps1
