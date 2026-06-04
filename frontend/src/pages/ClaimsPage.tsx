@@ -235,10 +235,13 @@ const ClaimsPage: React.FC = () => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
+    // Escape any free-text field before inlining it into the printed HTML (prevents stored XSS).
+    const esc = (v: any) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c));
+
     printWindow.document.write(`
       <html>
         <head>
-          <title>CoA - ${test.batch_id}</title>
+          <title>CoA - ${esc(test.batch_id)}</title>
           <style>
             body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #2c3e50; padding: 40px; line-height: 1.6; }
             .header { text-align: center; border-bottom: 2px solid #004abb; padding-bottom: 20px; margin-bottom: 30px; }
@@ -274,11 +277,11 @@ const ClaimsPage: React.FC = () => {
           </div>
 
           <div class="meta-grid">
-            <div class="meta-item"><strong>Batch ID:</strong> ${test.batch_id}</div>
+            <div class="meta-item"><strong>Batch ID:</strong> ${esc(test.batch_id)}</div>
             <div class="meta-item"><strong>Date of Test:</strong> ${new Date(test.testing_timestamp).toLocaleString(locale === 'ro' ? 'ro-RO' : 'en-US')}</div>
-            <div class="meta-item"><strong>Production Line:</strong> ${test.production_line}</div>
-            <div class="meta-item"><strong>Material Grade:</strong> ${test.material_grade}</div>
-            <div class="meta-item"><strong>Delivery Note Ref:</strong> ${test.delivery_note_no || 'N/A'}</div>
+            <div class="meta-item"><strong>Production Line:</strong> ${esc(test.production_line)}</div>
+            <div class="meta-item"><strong>Material Grade:</strong> ${esc(test.material_grade)}</div>
+            <div class="meta-item"><strong>Delivery Note Ref:</strong> ${esc(test.delivery_note_no || 'N/A')}</div>
           </div>
 
           <table>
