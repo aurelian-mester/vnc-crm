@@ -293,7 +293,7 @@ func claimsFromToken(r *http.Request) (jwt.MapClaims, error) {
 	tokenString := parts[1]
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		return jwtKey, nil
-	})
+	}, jwt.WithValidMethods([]string{"HS256"}))
 	if err != nil || !token.Valid {
 		return nil, fmt.Errorf("invalid token: %v", err)
 	}
@@ -304,6 +304,41 @@ func claimsFromToken(r *http.Request) (jwt.MapClaims, error) {
 	}
 
 	return claims, nil
+}
+
+// Role sets aligned with the frontend access matrix (components/Sidebar.tsx).
+// salesRoles: leads/opportunities/customers/sales/quotes write access.
+var salesRoles = map[string]bool{"admin": true, "sales": true, "asm": true, "ai": true, "rsm": true, "sales_manager": true, "management": true}
+
+// logisticsRoles: Load Optimizer access.
+var logisticsRoles = map[string]bool{"admin": true, "sales": true, "asm": true, "ai": true, "rsm": true, "sales_manager": true, "management": true, "production": true, "quality": true}
+
+// managerRoles may act across other salespeople's records (no ownership scoping).
+var managerRoles = map[string]bool{"admin": true, "management": true, "sales_manager": true, "rsm": true}
+
+// claimStr safely reads a string claim without panicking on a missing/non-string value.
+func claimStr(claims jwt.MapClaims, key string) string {
+	if v, ok := claims[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// authorize validates the request's JWT and, when allowed != nil, checks the
+// caller's role is in the allowed set. On failure it writes 401/403 and returns
+// ok=false so the handler can simply `return`. Pass allowed=nil to require only
+// a valid (authenticated) token.
+func authorize(w http.ResponseWriter, r *http.Request, allowed map[string]bool) (jwt.MapClaims, bool) {
+	claims, err := claimsFromToken(r)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return nil, false
+	}
+	if allowed != nil && !allowed[claimStr(claims, "role")] {
+		http.Error(w, "Forbidden: insufficient role", http.StatusForbidden)
+		return nil, false
+	}
+	return claims, true
 }
 
 func main() {
@@ -1031,6 +1066,10 @@ func handleUpdateQuote(w http.ResponseWriter, r *http.Request) {
 
 func handleDeleteQuote(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	claims, ok := authorize(w, r, salesRoles)
+	if !ok {
+		return
+	}
 	vars := mux.Vars(r)
 	quoteID, err := strconv.Atoi(vars["id"])
 	if err != nil {
@@ -1041,6 +1080,20 @@ func handleDeleteQuote(w http.ResponseWriter, r *http.Request) {
 	if db == nil {
 		http.Error(w, "Database unavailable", http.StatusInternalServerError)
 		return
+	}
+
+	// Non-manager roles may only delete their own quotes.
+	if !managerRoles[claimStr(claims, "role")] {
+		salesCode := claimStr(claims, "salesperson_code")
+		var owner string
+		if err := db.QueryRow("SELECT salesperson_code FROM quotes WHERE id = $1", quoteID).Scan(&owner); err != nil {
+			http.Error(w, "Quote not found", http.StatusNotFound)
+			return
+		}
+		if salesCode == "" || owner != salesCode {
+			http.Error(w, "Forbidden: not your quote", http.StatusForbidden)
+			return
+		}
 	}
 
 	_, err = db.Exec("DELETE FROM quotes WHERE id = $1", quoteID)
@@ -1054,8 +1107,20 @@ func handleDeleteQuote(w http.ResponseWriter, r *http.Request) {
 
 func handleGetCustomerQuotes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	claims, ok := authorize(w, r, nil)
+	if !ok {
+		return
+	}
 	vars := mux.Vars(r)
 	customerID := vars["id"]
+
+	// External (B2B) users may only read their own customer's quotes.
+	if claimStr(claims, "role") == "external" {
+		if cid := claimStr(claims, "customer_id"); cid == "" || cid != customerID {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+	}
 
 	if db == nil {
 		// Mock response if database isn't connected
@@ -1478,6 +1543,9 @@ type QualityConfig struct {
 // Leads handlers
 func handleGetLeads(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, salesRoles); !ok {
+		return
+	}
 	if db == nil {
 		json.NewEncoder(w).Encode([]Lead{})
 		return
@@ -1505,6 +1573,9 @@ func handleGetLeads(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateLead(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, salesRoles); !ok {
+		return
+	}
 	var req Lead
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
@@ -1528,6 +1599,9 @@ func handleCreateLead(w http.ResponseWriter, r *http.Request) {
 
 func handleUpdateLead(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, salesRoles); !ok {
+		return
+	}
 	vars := mux.Vars(r)
 	id, _ := strconv.Atoi(vars["id"])
 	var req Lead
@@ -1555,6 +1629,9 @@ func handleUpdateLead(w http.ResponseWriter, r *http.Request) {
 // Opportunities handlers
 func handleGetOpportunities(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, salesRoles); !ok {
+		return
+	}
 	if db == nil {
 		json.NewEncoder(w).Encode([]Opportunity{})
 		return
@@ -1591,6 +1668,9 @@ func handleGetOpportunities(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateOpportunity(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, salesRoles); !ok {
+		return
+	}
 	var req Opportunity
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
@@ -1622,6 +1702,9 @@ func handleCreateOpportunity(w http.ResponseWriter, r *http.Request) {
 
 func handleUpdateOpportunity(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, salesRoles); !ok {
+		return
+	}
 	vars := mux.Vars(r)
 	id, _ := strconv.Atoi(vars["id"])
 	var req Opportunity
@@ -1657,6 +1740,9 @@ func handleUpdateOpportunity(w http.ResponseWriter, r *http.Request) {
 // Projects handlers
 func handleGetProjects(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, nil); !ok {
+		return
+	}
 	if db == nil {
 		json.NewEncoder(w).Encode([]Project{})
 		return
@@ -1693,6 +1779,9 @@ func handleGetProjects(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, salesRoles); !ok {
+		return
+	}
 	var req Project
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
@@ -1724,6 +1813,9 @@ func handleCreateProject(w http.ResponseWriter, r *http.Request) {
 
 func handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, salesRoles); !ok {
+		return
+	}
 	vars := mux.Vars(r)
 	id, _ := strconv.Atoi(vars["id"])
 	var req Project
@@ -2035,6 +2127,9 @@ func handleGetCustomerMetrics(w http.ResponseWriter, r *http.Request) {
 // Lab Tests Handlers
 func handleGetLabTests(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, nil); !ok {
+		return
+	}
 	if db == nil {
 		json.NewEncoder(w).Encode([]LabTest{})
 		return
@@ -2077,6 +2172,9 @@ func handleGetLabTests(w http.ResponseWriter, r *http.Request) {
 
 func handleGetLabTestDetails(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, nil); !ok {
+		return
+	}
 	vars := mux.Vars(r)
 	batchID := vars["batch_id"]
 
@@ -2576,6 +2674,9 @@ func handleResolveClaim(w http.ResponseWriter, r *http.Request) {
 
 func handleGetQualityConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, nil); !ok {
+		return
+	}
 	if db == nil {
 		http.Error(w, "Database unavailable", http.StatusInternalServerError)
 		return
@@ -2723,6 +2824,9 @@ type OptimizeResponse struct {
 
 func handleGetLogisticsPresets(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, logisticsRoles); !ok {
+		return
+	}
 	if db == nil {
 		http.Error(w, "Database unavailable", http.StatusInternalServerError)
 		return
@@ -2767,6 +2871,9 @@ func handleGetLogisticsPresets(w http.ResponseWriter, r *http.Request) {
 
 func handleGetLoadPlans(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, logisticsRoles); !ok {
+		return
+	}
 	if db == nil {
 		http.Error(w, "Database unavailable", http.StatusInternalServerError)
 		return
@@ -2792,6 +2899,9 @@ func handleGetLoadPlans(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateLoadPlan(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, logisticsRoles); !ok {
+		return
+	}
 	var lp LoadPlan
 	if err := json.NewDecoder(r.Body).Decode(&lp); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
@@ -2820,6 +2930,9 @@ func handleCreateLoadPlan(w http.ResponseWriter, r *http.Request) {
 
 func handleOptimizeLoad(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r, logisticsRoles); !ok {
+		return
+	}
 	var req OptimizeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
