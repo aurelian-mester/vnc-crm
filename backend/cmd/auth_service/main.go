@@ -23,16 +23,31 @@ import (
 var (
 	tenantID     = "a414e16c-f4d2-45b6-bf83-1b63a91d3ecb"
 	clientID     = "780afb7e-5e51-4528-b7e7-2502793984dc"
-	clientSecret = "Pmz8Q~euPGwT0iufbB6mx~fm6Sbu3rDnU63kjaEk"
+	clientSecret string
 	redirectURL  = os.Getenv("OAUTH_REDIRECT_URL")
-	jwtKey       = []byte("vnc-crm-secret-key-2026") // Should be in env
+	jwtKey       []byte
+	dwhURL       string
 	db           *sql.DB
 	productsDB   *sql.DB
 )
 
 var oauthConfig *oauth2.Config
 
+// mustEnv returns the named environment variable, or exits the process if it is
+// unset, so a missing secret fails the service at boot rather than silently
+// falling back to a hardcoded credential.
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		log.Fatalf("FATAL: %s environment variable is required", key)
+	}
+	return v
+}
+
 func init() {
+	jwtKey = []byte(mustEnv("JWT_SECRET"))
+	clientSecret = mustEnv("OAUTH_CLIENT_SECRET")
+	dwhURL = mustEnv("DWH_DATABASE_URL")
 	if redirectURL == "" {
 		redirectURL = "https://192.168.72.20/vnc-crm/api/auth/callback"
 	}
@@ -60,10 +75,7 @@ type User struct {
 }
 
 func initDB() {
-	connStr := os.Getenv("DATABASE_URL")
-	if connStr == "" {
-		connStr = "postgres://vnc_user:vnc_pass_2026@localhost/crm_db?sslmode=disable"
-	}
+	connStr := mustEnv("DATABASE_URL")
 
 	var err error
 	db, err = sql.Open("postgres", connStr)
@@ -193,10 +205,7 @@ func initDB() {
 		}
 	}
 
-	prodConnStr := os.Getenv("PRODUCTS_DATABASE_URL")
-	if prodConnStr == "" {
-		prodConnStr = "postgres://vnc_user:vnc_pass_2026@localhost/products_db?sslmode=disable"
-	}
+	prodConnStr := mustEnv("PRODUCTS_DATABASE_URL")
 	productsDB, err = sql.Open("postgres", prodConnStr)
 	if err != nil {
 		log.Printf("Warning: Failed to connect to products_db: %v", err)
@@ -821,10 +830,7 @@ func handleUpdateUserSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func executeSync() (map[string]interface{}, error) {
-	dwhConnStr := os.Getenv("DWH_DATABASE_URL")
-	if dwhConnStr == "" {
-		dwhConnStr = "postgres://biusr:5324@172.16.75.97/dwh?sslmode=disable"
-	}
+	dwhConnStr := dwhURL
 
 	dwhDB, err := sql.Open("postgres", dwhConnStr)
 	if err != nil {

@@ -17,7 +17,20 @@ import (
 	_ "github.com/lib/pq"
 )
 
-var jwtKey = []byte("vnc-crm-secret-key-2026")
+// jwtKey and dwhURL are loaded from the environment at startup (fail-closed).
+var jwtKey []byte
+var dwhURL string
+
+// mustEnv returns the named environment variable, or exits the process if it is
+// unset, so a missing secret fails the service at boot rather than silently
+// falling back to a hardcoded credential.
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		log.Fatalf("FATAL: %s environment variable is required", key)
+	}
+	return v
+}
 
 // claimsFromToken validates the request's Bearer JWT (HS256 + signature + expiry).
 func claimsFromToken(r *http.Request) (jwt.MapClaims, error) {
@@ -111,10 +124,7 @@ type CalculationResponse struct {
 var db *sql.DB
 
 func initDB() {
-	connStr := os.Getenv("PRODUCTS_DATABASE_URL")
-	if connStr == "" {
-		connStr = "postgres://vnc_user:vnc_pass_2026@localhost/products_db?sslmode=disable"
-	}
+	connStr := mustEnv("PRODUCTS_DATABASE_URL")
 	var err error
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
@@ -127,6 +137,8 @@ func initDB() {
 }
 
 func main() {
+	jwtKey = []byte(mustEnv("JWT_SECRET"))
+	dwhURL = mustEnv("DWH_DATABASE_URL")
 	initDB()
 
 	r := mux.NewRouter()
@@ -585,10 +597,7 @@ func handleCalculate(w http.ResponseWriter, r *http.Request) {
 }
 
 func getCustomerProducts(customerID, search, category string) ([]Product, error) {
-	dwhConnStr := os.Getenv("DWH_DATABASE_URL")
-	if dwhConnStr == "" {
-		dwhConnStr = "postgres://biusr:5324@172.16.75.97/dwh?sslmode=disable"
-	}
+	dwhConnStr := dwhURL
 	dwhDB, err := sql.Open("postgres", dwhConnStr)
 	if err != nil {
 		return nil, err
