@@ -1,7 +1,23 @@
-import React, { useEffect, useMemo } from 'react';
-import { Canvas } from '@react-three/fiber';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Html } from '@react-three/drei';
 import * as THREE from 'three';
+
+// Keeps the camera distance fitted to the box's actual extent so large styles
+// (e.g. FEFCO 203 full-overlap flaps) aren't clipped, while small boxes still
+// fill the frame. Re-fits whenever the target radius changes; auto-rotate then
+// continues orbiting at the new radius.
+const CameraRig: React.FC<{ fitRadius: number; controlsRef: React.MutableRefObject<any> }> = ({ fitRadius, controlsRef }) => {
+  const { camera } = useThree();
+  useEffect(() => {
+    const dir = camera.position.clone().normalize();
+    if (dir.lengthSq() === 0) dir.set(1, 0.85, 1).normalize();
+    camera.position.copy(dir.multiplyScalar(fitRadius));
+    camera.updateProjectionMatrix();
+    if (controlsRef.current) controlsRef.current.update();
+  }, [fitRadius, camera, controlsRef]);
+  return null;
+};
 
 // Procedural Cardboard & Custom Canvas Texture Generator Hook
 const useCardboardTextures = (
@@ -928,8 +944,27 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   const wallAngle = -(Math.PI / 2) * fWalls;
   const flapAngle = (Math.PI / 2) * fFlaps;
 
+  // Single-box presentation: lay the flat blank down on the floor at 0% and
+  // tilt it upright as the walls rise, so it never reads as a vertical sheet
+  // floating in mid-air. Once the walls are fully up (fWalls = 1) the tilt is
+  // zero, leaving the folded/closed states untouched.
+  const assemblyTilt = -(Math.PI / 2) * (1 - fWalls);
+  // Keep the base resting on the ground plane as the blank rises: centered box
+  // bottom sits at the grid when upright, flat sheet lies on the grid at 0%.
+  const groundedY = -0.02 - (height / 2) * (1 - fWalls);
+
+  // Camera fit: account for the box footprint plus any open flaps that extend
+  // beyond the body, so the framing covers the tallest fold state. The
+  // flat-box view lays the unfolded blank and the 3D box side by side, so it
+  // spans roughly 2.5x the box length and needs a wider fit.
+  const verticalExtent = height + (hasTopFlaps ? topFlapH : 0) + bottomFlapH;
+  const singleExtent = Math.max(length, width, verticalExtent);
+  const maxExtent = viewMode === 'flat-box' ? Math.max(singleExtent, 2.6 * length) : singleExtent;
+  const fitRadius = Math.max(7, maxExtent * 1.9);
+
   // Auto-rotation idle timers
   const [autoRotate, setAutoRotate] = React.useState(true);
+  const controlsRef = useRef<any>(null);
   const timerRef = React.useRef<NodeJS.Timeout | null>(null);
 
   const handleInteractionStart = () => {
@@ -951,7 +986,8 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   }, []);
 
   return (
-    <Canvas camera={{ position: [6, 5, 6], fov: 42 }} shadows gl={{ preserveDrawingBuffer: true }}>
+    <Canvas camera={{ position: [9, 7.5, 9], fov: 42 }} shadows gl={{ preserveDrawingBuffer: true }}>
+      <CameraRig fitRadius={fitRadius} controlsRef={controlsRef} />
       <ambientLight intensity={0.6} />
       
       {/* Dynamic Key Studio Light */}
@@ -978,11 +1014,11 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
       {/* Floor grid overlay matching CRM styling */}
       <gridHelper args={[30, 30, '#cbd5e0', '#e2e8f0']} position={[0, -height / 2 - 0.015, 0]} />
 
-      <group position={[0, -0.2, 0]}>
+      <group position={[0, 0, 0]}>
         {/* VIEWMODE: SINGLE 3D BOX VIEW */}
         {viewMode === 'box' && (
-          <group position={[0, 0, 0]}>
-            <BoxAssembly 
+          <group position={[0, groundedY, 0]} rotation={[assemblyTilt, 0, 0]}>
+            <BoxAssembly
               length={length}
               width={width}
               height={height}
@@ -1064,8 +1100,8 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
           </group>
         )}
 
-        {/* --- DYNAMIC DIMENSIONS OVERLAYS --- */}
-        {numericFold > 0.05 && (
+        {/* --- DYNAMIC DIMENSIONS OVERLAYS (only once the box stands upright) --- */}
+        {numericFold >= 0.5 && (
           <group position={viewMode === 'flat-box' ? [length / 2 + 0.3, 0, 0] : [0, 0, 0]}>
             {/* Length Dimension Line (Front Bottom) */}
             <DimensionOverlay
@@ -1097,10 +1133,11 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
         )}
       </group>
 
-      <OrbitControls 
-        minDistance={2} 
-        maxDistance={15} 
-        autoRotate={autoRotate} 
+      <OrbitControls
+        ref={controlsRef}
+        minDistance={2}
+        maxDistance={45}
+        autoRotate={autoRotate}
         autoRotateSpeed={0.8}
         onStart={handleInteractionStart}
         onEnd={handleInteractionEnd}
