@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useI18n } from '../i18n';
 import { parseJWT } from '../App';
+import TruckVisualizer3D from '../components/TruckVisualizer3D';
 
 interface PalletPreset {
   id: number;
@@ -45,6 +46,8 @@ interface QueueItem {
   quantity: number;
   stackable: boolean;
   color: string;
+  destination: string;
+  sequence: number; // delivery order; 1 = first delivery (unloaded first)
 }
 
 interface PackedPallet {
@@ -60,6 +63,8 @@ interface PackedPallet {
   rotated: boolean;
   color: string;
   is_trailer: boolean;
+  destination?: string;
+  sequence?: number;
 }
 
 const TruckOptimizerPage: React.FC = () => {
@@ -73,6 +78,11 @@ const TruckOptimizerPage: React.FC = () => {
   const [palletPresets, setPalletPresets] = useState<PalletPreset[]>([]);
   const [loadPlans, setLoadPlans] = useState<LoadPlan[]>([]);
   const [activeTruck, setActiveTruck] = useState<TruckPreset | null>(null);
+
+  // Loading options
+  const [doubleDeck, setDoubleDeck] = useState(false);
+  const [deckClearance, setDeckClearance] = useState(1300); // mm, lower-deck clear height
+  const [unloadSide, setUnloadSide] = useState<'rear' | 'side'>('rear');
   
   // Packing queue state
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -85,7 +95,9 @@ const TruckOptimizerPage: React.FC = () => {
     weight: 450,
     quantity: 10,
     stackable: true,
-    color: '#e74c3c'
+    color: '#e74c3c',
+    destination: '',
+    sequence: 1
   });
 
   // Pack result state
@@ -99,11 +111,6 @@ const TruckOptimizerPage: React.FC = () => {
     axleDistribution: 'Balanced'
   });
 
-  // Dragging state
-  const [draggingPalletId, setDraggingPalletId] = useState<string | null>(null);
-  const dragStartPos = useRef({ x: 0, y: 0 });
-  const dragStartCoords = useRef({ x: 0, y: 0 });
-  
   // Notification state
   const [saveTitle, setSaveTitle] = useState('');
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -170,7 +177,9 @@ const TruckOptimizerPage: React.FC = () => {
         weight: customPallet.weight,
         quantity: customPallet.quantity,
         stackable: customPallet.stackable,
-        color
+        color,
+        destination: customPallet.destination,
+        sequence: customPallet.sequence
       };
     }
     setQueue([...queue, newItem]);
@@ -193,6 +202,8 @@ const TruckOptimizerPage: React.FC = () => {
         },
         body: JSON.stringify({
           truck_preset_id: activeTruck.id,
+          double_deck: doubleDeck,
+          deck_clearance_mm: deckClearance,
           items: queue.map(q => ({
             id: q.id,
             name: q.name,
@@ -202,7 +213,9 @@ const TruckOptimizerPage: React.FC = () => {
             weight_kg: q.weight,
             quantity: q.quantity,
             stackable: q.stackable,
-            color: q.color
+            color: q.color,
+            destination: q.destination,
+            sequence: q.sequence
           }))
         })
       });
@@ -223,70 +236,6 @@ const TruckOptimizerPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  // Dragging interaction handlers on the SVG Canvas
-  const handleMouseDown = (e: React.MouseEvent, pId: string) => {
-    e.preventDefault();
-    setDraggingPalletId(pId);
-    const pallet = packedItems.find(p => p.id === pId);
-    if (!pallet) return;
-    dragStartPos.current = { x: e.clientX, y: e.clientY };
-    dragStartCoords.current = { x: pallet.x, y: pallet.y };
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!draggingPalletId || !activeTruck) return;
-    const dx = e.clientX - dragStartPos.current.x;
-    const dy = e.clientY - dragStartPos.current.y;
-    
-    // Scale factor is 0.05 (20mm = 1px)
-    const scale = 20.0;
-    const mmDx = Math.round(dx * scale);
-    const mmDy = Math.round(dy * scale);
-
-    setPackedItems(prev => prev.map(p => {
-      if (p.id !== draggingPalletId) return p;
-      let newX = dragStartCoords.current.x + mmDx;
-      let newY = dragStartCoords.current.y + mmDy;
-
-      // Keep within truck borders
-      const lenLimit = p.is_trailer ? activeTruck.trailer_length_mm : activeTruck.bed_length_mm;
-      newX = Math.max(0, Math.min(newX, lenLimit - p.length));
-      newY = Math.max(0, Math.min(newY, activeTruck.bed_width_mm - p.width));
-
-      return { ...p, x: newX, y: newY };
-    }));
-  };
-
-  const handleMouseUp = () => {
-    if (!draggingPalletId) return;
-    
-    // Snap positions to nearest 50mm on drag release
-    setPackedItems(prev => prev.map(p => {
-      if (p.id !== draggingPalletId) return p;
-      const snapX = Math.round(p.x / 50) * 50;
-      const snapY = Math.round(p.y / 50) * 50;
-      return { ...p, x: snapX, y: snapY };
-    }));
-
-    setDraggingPalletId(null);
-    recalculateStats();
-  };
-
-  // Double Click to Rotate Pallet
-  const handleDoubleClick = (pId: string) => {
-    setPackedItems(prev => prev.map(p => {
-      if (p.id !== pId) return p;
-      const nextRotated = !p.rotated;
-      return {
-        ...p,
-        rotated: nextRotated,
-        length: p.width,
-        width: p.length
-      };
-    }));
-    recalculateStats();
   };
 
   // Client-Side Live Recalculations of stats after manual adjustments
@@ -395,11 +344,6 @@ const TruckOptimizerPage: React.FC = () => {
   const handlePrintSheet = () => {
     window.print();
   };
-
-  // SVG Scalers & Coordinate Helpers
-  // Bed Width is always 2450mm -> Scaled to 122.5px (scale = 0.05)
-  // Bed Length 13600mm -> Scaled to 680px
-  const scale = 0.05;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
@@ -531,6 +475,45 @@ const TruckOptimizerPage: React.FC = () => {
             </div>
           </div>
 
+          {/* Loading Options */}
+          <div className="card" style={{ padding: '20px' }}>
+            <h4 style={{ margin: '0 0 15px 0', color: 'var(--secondary-color)', fontSize: '0.95rem' }}>
+              ⚙️ {locale === 'ro' ? 'Opțiuni Încărcare' : 'Loading Options'}
+            </h4>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', cursor: 'pointer', marginBottom: '12px' }}>
+              <input type="checkbox" checked={doubleDeck} onChange={e => setDoubleDeck(e.target.checked)} />
+              {locale === 'ro' ? 'Remorcă cu două punți (double-decker)' : 'Double-deck trailer'}
+            </label>
+            {doubleDeck && (
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+                  {locale === 'ro' ? 'Înălțime liberă punte inferioară (mm)' : 'Lower-deck clear height (mm)'}
+                </label>
+                <input
+                  type="number"
+                  value={deckClearance}
+                  min={500}
+                  max={activeTruck ? activeTruck.bed_height_mm - 300 : 2200}
+                  onChange={e => setDeckClearance(Math.max(300, Number(e.target.value)))}
+                  style={{ width: '100%', padding: '8px', border: '1px solid var(--border-color)', borderRadius: '6px', boxSizing: 'border-box' }}
+                />
+              </div>
+            )}
+            <div>
+              <label style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
+                {locale === 'ro' ? 'Sens descărcare' : 'Unload from'}
+              </label>
+              <select
+                value={unloadSide}
+                onChange={e => setUnloadSide(e.target.value as 'rear' | 'side')}
+                style={{ width: '100%', padding: '8px', border: '1px solid var(--border-color)', borderRadius: '6px', boxSizing: 'border-box' }}
+              >
+                <option value="rear">{locale === 'ro' ? 'Spate (uși)' : 'Rear (doors)'}</option>
+                <option value="side">{locale === 'ro' ? 'Lateral' : 'Side'}</option>
+              </select>
+            </div>
+          </div>
+
           {/* Pallet Adder Form */}
           <div className="card" style={{ padding: '20px' }}>
             <h4 style={{ margin: '0 0 15px 0', color: 'var(--secondary-color)', fontSize: '0.95rem' }}>
@@ -632,6 +615,33 @@ const TruckOptimizerPage: React.FC = () => {
                 />
               </div>
 
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 110px', gap: '10px' }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    {locale === 'ro' ? 'Destinație / Client' : 'Destination / Customer'}
+                  </label>
+                  <input
+                    type="text"
+                    value={customPallet.destination}
+                    onChange={e => setCustomPallet({ ...customPallet, destination: e.target.value })}
+                    className="config-input"
+                    placeholder={locale === 'ro' ? 'ex. Cluj — Client A' : 'e.g., Cluj — Customer A'}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }} title={locale === 'ro' ? '1 = prima livrare (descărcat primul)' : '1 = first delivery (unloaded first)'}>
+                    {locale === 'ro' ? 'Opr. livrare #' : 'Drop #'}
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={customPallet.sequence}
+                    onChange={e => setCustomPallet({ ...customPallet, sequence: Math.max(1, Number(e.target.value)) })}
+                    className="config-input"
+                  />
+                </div>
+              </div>
+
               <button type="submit" className="btn-primary" style={{ padding: '8px 12px', marginTop: '6px' }}>
                 ➕ {locale === 'ro' ? 'Adaugă în Coadă' : 'Add to Queue'}
               </button>
@@ -679,237 +689,30 @@ const TruckOptimizerPage: React.FC = () => {
         {/* Right Side Visualizer & Canvas Workspace */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           
-          {/* Top-Down visualizer bed */}
-          <div className="card" style={{ padding: '25px', overflowX: 'auto' }}>
-            <h4 style={{ margin: '0 0 15px 0', color: 'var(--secondary-color)', fontSize: '0.95rem' }}>
-              🗺️ {locale === 'ro' ? 'Harta Încărcare Podea (Vedere de sus)' : 'Floor Grid Packing Plan (Top-Down)'}
-            </h4>
-
-            {activeTruck && (
-              <div 
-                style={{ 
-                  display: 'flex', 
-                  flexDirection: 'column', 
-                  gap: '30px', 
-                  alignItems: 'center',
-                  backgroundColor: '#0f172a', // Dark theme background for visual pop
-                  padding: '40px 20px',
-                  borderRadius: '12px',
-                  position: 'relative'
-                }}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-              >
-                
-                {/* Main truck bed SVG */}
-                <div>
-                  <div style={{ color: '#94a3b8', fontSize: '0.8rem', fontWeight: 600, marginBottom: '8px', textAlign: 'center' }}>
-                    CABIN FRONT (X=0) ➔➔ REAR (X={activeTruck.bed_length_mm})
-                  </div>
-                  <svg 
-                    width={activeTruck.bed_length_mm * scale + 40} 
-                    height={activeTruck.bed_width_mm * scale + 30} 
-                    style={{ overflow: 'visible' }}
-                  >
-                    {/* Cabin representation */}
-                    <rect x="-30" y="20" width="25" height={activeTruck.bed_width_mm * scale - 40} fill="#475569" rx="4" />
-                    <line x1="-30" y1="20" x2="-5" y2="40" stroke="#64748b" strokeWidth="2" />
-                    
-                    {/* Bed layout */}
-                    <rect 
-                      x="0" 
-                      y="0" 
-                      width={activeTruck.bed_length_mm * scale} 
-                      height={activeTruck.bed_width_mm * scale} 
-                      fill="#1e293b" 
-                      stroke="#475569" 
-                      strokeWidth="3"
-                    />
-
-                    {/* Guidelines and grid */}
-                    <line x1={activeTruck.bed_length_mm * scale / 2} y1="0" x2={activeTruck.bed_length_mm * scale / 2} y2={activeTruck.bed_width_mm * scale} stroke="#334155" strokeDasharray="5,5" />
-
-                    {/* Wheel axles indicator */}
-                    <circle cx="90" cy={activeTruck.bed_width_mm * scale + 10} r="8" fill="#475569" />
-                    <circle cx={activeTruck.bed_length_mm * scale - 90} cy={activeTruck.bed_width_mm * scale + 10} r="8" fill="#475569" />
-                    <circle cx={activeTruck.bed_length_mm * scale - 120} cy={activeTruck.bed_width_mm * scale + 10} r="8" fill="#475569" />
-
-                    {/* Packed items */}
-                    {packedItems.filter(p => !p.is_trailer).map(p => (
-                      <g 
-                        key={p.id}
-                        transform={`translate(${p.x * scale}, ${p.y * scale})`}
-                        onMouseDown={(e) => handleMouseDown(e, p.id)}
-                        onDoubleClick={() => handleDoubleClick(p.id)}
-                        style={{ cursor: draggingPalletId === p.id ? 'grabbing' : 'grab' }}
-                      >
-                        <rect
-                          width={p.length * scale}
-                          height={p.width * scale}
-                          fill={p.color}
-                          stroke="#ffffff"
-                          strokeWidth={draggingPalletId === p.id ? "2" : "1"}
-                          opacity={p.z > 0 ? 0.9 : 1}
-                          rx="3"
-                        />
-                        {/* If stacked, draw small tier indicator box */}
-                        {p.z > 0 ? (
-                          <rect
-                            x="4"
-                            y="4"
-                            width={p.length * scale - 8}
-                            height={p.width * scale - 8}
-                            fill="none"
-                            stroke="#ffffff"
-                            strokeWidth="1.5"
-                            strokeDasharray="2,2"
-                          />
-                        ) : null}
-
-                        {/* Label */}
-                        {p.length * scale > 30 && (
-                          <text
-                            x={p.length * scale / 2}
-                            y={p.width * scale / 2 + 4}
-                            textAnchor="middle"
-                            fill="#ffffff"
-                            fontSize="8"
-                            fontWeight="bold"
-                            style={{ userSelect: 'none', pointerEvents: 'none' }}
-                          >
-                            {p.z > 0 ? `➋ ${p.name.slice(0,4)}` : p.name.slice(0,6)}
-                          </text>
-                        )}
-                        <title>{`${p.name}\nSize: ${p.length}x${p.width}x${p.height}mm\nWeight: ${p.weight}kg\nZ-Height: ${p.z > 0 ? 'Double Stack' : 'Floor'}\n(Double click to rotate)`}</title>
-                      </g>
-                    ))}
-                  </svg>
-                </div>
-
-                {/* Trailer bed layout (only if Tandem type) */}
-                {activeTruck.is_tandem && (
-                  <div>
-                    <div style={{ color: '#94a3b8', fontSize: '0.8rem', fontWeight: 600, marginBottom: '8px', textAlign: 'center' }}>
-                      TRAILER BACK BED (Length: {activeTruck.trailer_length_mm}mm)
-                    </div>
-                    <svg 
-                      width={activeTruck.trailer_length_mm * scale + 40} 
-                      height={activeTruck.bed_width_mm * scale + 30} 
-                      style={{ overflow: 'visible' }}
-                    >
-                      {/* Hook representation */}
-                      <line x1="-30" y1={activeTruck.bed_width_mm * scale / 2} x2="0" y2={activeTruck.bed_width_mm * scale / 2} stroke="#64748b" strokeWidth="4" />
-                      
-                      <rect 
-                        x="0" 
-                        y="0" 
-                        width={activeTruck.trailer_length_mm * scale} 
-                        height={activeTruck.bed_width_mm * scale} 
-                        fill="#1e293b" 
-                        stroke="#475569" 
-                        strokeWidth="3"
-                      />
-
-                      {/* Wheels */}
-                      <circle cx="80" cy={activeTruck.bed_width_mm * scale + 10} r="8" fill="#475569" />
-                      <circle cx="110" cy={activeTruck.bed_width_mm * scale + 10} r="8" fill="#475569" />
-                      <circle cx={activeTruck.trailer_length_mm * scale - 80} cy={activeTruck.bed_width_mm * scale + 10} r="8" fill="#475569" />
-
-                      {/* Packed trailer items */}
-                      {packedItems.filter(p => p.is_trailer).map(p => (
-                        <g 
-                          key={p.id}
-                          transform={`translate(${p.x * scale}, ${p.y * scale})`}
-                          onMouseDown={(e) => handleMouseDown(e, p.id)}
-                          onDoubleClick={() => handleDoubleClick(p.id)}
-                          style={{ cursor: draggingPalletId === p.id ? 'grabbing' : 'grab' }}
-                        >
-                          <rect
-                            width={p.length * scale}
-                            height={p.width * scale}
-                            fill={p.color}
-                            stroke="#ffffff"
-                            strokeWidth={draggingPalletId === p.id ? "2" : "1"}
-                            opacity={p.z > 0 ? 0.9 : 1}
-                            rx="3"
-                          />
-                          {p.z > 0 && (
-                            <rect
-                              x="4"
-                              y="4"
-                              width={p.length * scale - 8}
-                              height={p.width * scale - 8}
-                              fill="none"
-                              stroke="#ffffff"
-                              strokeWidth="1.5"
-                              strokeDasharray="2,2"
-                            />
-                          )}
-
-                          {p.length * scale > 30 && (
-                            <text
-                              x={p.length * scale / 2}
-                              y={p.width * scale / 2 + 4}
-                              textAnchor="middle"
-                              fill="#ffffff"
-                              fontSize="8"
-                              fontWeight="bold"
-                              style={{ userSelect: 'none', pointerEvents: 'none' }}
-                            >
-                              {p.z > 0 ? `➋ ${p.name.slice(0,4)}` : p.name.slice(0,6)}
-                            </text>
-                          )}
-                          <title>{`${p.name}\nSize: ${p.length}x${p.width}x${p.height}mm\nWeight: ${p.weight}kg`}</title>
-                        </g>
-                      ))}
-                    </svg>
-                  </div>
-                )}
-                
-              </div>
-            )}
-          </div>
-
-          {/* Side View Double-Stack representations */}
+          {/* 3D Truck Load Visualizer */}
           <div className="card" style={{ padding: '25px' }}>
             <h4 style={{ margin: '0 0 15px 0', color: 'var(--secondary-color)', fontSize: '0.95rem' }}>
-              📊 {locale === 'ro' ? 'Structură Stive Inălțime (Vedere laterală)' : 'Double Stacking Structure (Side Elevation)'}
+              🚚 {locale === 'ro' ? 'Vizualizare 3D Încărcare Camion' : '3D Truck Load Visualizer'}
             </h4>
-
-            {activeTruck && (
-              <div style={{ backgroundColor: '#0f172a', padding: '30px 20px', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '20px', overflowX: 'auto' }}>
-                <div>
-                  <div style={{ color: '#94a3b8', fontSize: '0.85rem', fontWeight: 600, marginBottom: '8px' }}>
-                    MAIN BED HEIGHT PROFILE (H: {activeTruck.bed_height_mm}mm)
-                  </div>
-                  <svg 
-                    width={activeTruck.bed_length_mm * scale + 20} 
-                    height={activeTruck.bed_height_mm * scale + 10} 
-                    style={{ border: '1px solid #475569', backgroundColor: '#1e293b' }}
-                  >
-                    {/* Floor line */}
-                    <line x1="0" y1={activeTruck.bed_height_mm * scale} x2={activeTruck.bed_length_mm * scale} y2={activeTruck.bed_height_mm * scale} stroke="#475569" strokeWidth="2" />
-                    
-                    {/* Render side view boxes */}
-                    {packedItems.filter(p => !p.is_trailer).map(p => (
-                      <rect
-                        key={p.id}
-                        x={p.x * scale}
-                        // SVG renders Y from top, so we subtract height to draw upwards from bed bottom
-                        y={(activeTruck.bed_height_mm - p.z - p.height) * scale}
-                        width={p.length * scale}
-                        height={p.height * scale}
-                        fill={p.color}
-                        stroke="#ffffff"
-                        strokeWidth="1.5"
-                        opacity="0.85"
-                        rx="2"
-                      />
-                    ))}
-                  </svg>
-                </div>
+            {activeTruck ? (
+              <div style={{ height: '520px', borderRadius: '12px', overflow: 'hidden', background: '#0f172a' }}>
+                <TruckVisualizer3D
+                  truck={activeTruck}
+                  pallets={packedItems}
+                  doubleDeck={doubleDeck}
+                  deckClearanceMm={deckClearance}
+                  showLabels={true}
+                  unloadSide={unloadSide}
+                />
+              </div>
+            ) : (
+              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                {locale === 'ro' ? 'Selectați un camion pentru a începe.' : 'Select a truck to begin.'}
               </div>
             )}
+            <div style={{ marginTop: '10px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              {locale === 'ro' ? 'Trageți pentru rotație · derulați pentru zoom · paleții din față = ultima livrare.' : 'Drag to orbit · scroll to zoom · front pallets = last delivery.'}
+            </div>
           </div>
 
           {/* Unpacked Tray Container */}
