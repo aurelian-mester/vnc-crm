@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -2939,20 +2940,24 @@ type LoadPlan struct {
 }
 
 type OptimizeRequestItem struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	LengthMM  int     `json:"length_mm"`
-	WidthMM   int     `json:"width_mm"`
-	HeightMM  int     `json:"height_mm"`
-	WeightKG  float64 `json:"weight_kg"`
-	Quantity  int     `json:"quantity"`
-	Stackable bool    `json:"stackable"`
-	Color     string  `json:"color"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	LengthMM    int     `json:"length_mm"`
+	WidthMM     int     `json:"width_mm"`
+	HeightMM    int     `json:"height_mm"`
+	WeightKG    float64 `json:"weight_kg"`
+	Quantity    int     `json:"quantity"`
+	Stackable   bool    `json:"stackable"`
+	Color       string  `json:"color"`
+	Destination string  `json:"destination"` // delivery stop label
+	Sequence    int     `json:"sequence"`    // delivery order; 1 = first delivery (unloaded first)
 }
 
 type OptimizeRequest struct {
-	TruckPresetID int                   `json:"truck_preset_id"`
-	Items         []OptimizeRequestItem `json:"items"`
+	TruckPresetID   int                   `json:"truck_preset_id"`
+	Items           []OptimizeRequestItem `json:"items"`
+	DoubleDeck      bool                  `json:"double_deck"`
+	DeckClearanceMM int                   `json:"deck_clearance_mm"` // lower-deck clear height
 }
 
 type PackedPallet struct {
@@ -2965,9 +2970,11 @@ type PackedPallet struct {
 	Width     int     `json:"width"`
 	Height    int     `json:"height"`
 	Weight    float64 `json:"weight"`
-	Rotated   bool    `json:"rotated"`
-	Color     string  `json:"color"`
-	IsTrailer bool    `json:"is_trailer"`
+	Rotated     bool    `json:"rotated"`
+	Color       string  `json:"color"`
+	IsTrailer   bool    `json:"is_trailer"`
+	Destination string  `json:"destination"`
+	Sequence    int     `json:"sequence"`
 }
 
 type OptimizeResponse struct {
@@ -3115,37 +3122,56 @@ func handleOptimizeLoad(w http.ResponseWriter, r *http.Request) {
 	for _, item := range req.Items {
 		for qtyIdx := 0; qtyIdx < item.Quantity; qtyIdx++ {
 			rawPallets = append(rawPallets, PackedPallet{
-				ID:     fmt.Sprintf("%s-%d", item.ID, qtyIdx+1),
-				Name:   item.Name,
-				Length: item.LengthMM,
-				Width:  item.WidthMM,
-				Height: item.HeightMM,
-				Weight: item.WeightKG,
-				Color:  item.Color,
+				ID:          fmt.Sprintf("%s-%d", item.ID, qtyIdx+1),
+				Name:        item.Name,
+				Length:      item.LengthMM,
+				Width:       item.WidthMM,
+				Height:      item.HeightMM,
+				Weight:      item.WeightKG,
+				Color:       item.Color,
+				Destination: item.Destination,
+				Sequence:    item.Sequence,
 			})
 		}
 	}
 
-	// Sort by area descending
-	for i := 0; i < len(rawPallets); i++ {
-		for j := i + 1; j < len(rawPallets); j++ {
-			areaI := rawPallets[i].Length * rawPallets[i].Width
-			areaJ := rawPallets[j].Length * rawPallets[j].Width
-			if areaJ > areaI {
-				rawPallets[i], rawPallets[j] = rawPallets[j], rawPallets[i]
-			}
+	// Load order: the LAST delivery is loaded FIRST so it sits at the front/nose
+	// and the FIRST delivery ends up at the unload end. Sort by delivery sequence
+	// descending (so higher stop numbers pack into low X first), then by area
+	// descending within the same delivery for tighter shelves.
+	sort.SliceStable(rawPallets, func(i, j int) bool {
+		if rawPallets[i].Sequence != rawPallets[j].Sequence {
+			return rawPallets[i].Sequence > rawPallets[j].Sequence
 		}
-	}
+		return rawPallets[i].Length*rawPallets[i].Width > rawPallets[j].Length*rawPallets[j].Width
+	})
 
 	var packed []PackedPallet = []PackedPallet{}
 	var unpacked []PackedPallet = []PackedPallet{}
 
+	// Lower-deck clear height for double-deckers; clamp to a sane band.
+	deckClear := req.DeckClearanceMM
+	if deckClear <= 0 || deckClear >= t.BedHeightMM {
+		deckClear = t.BedHeightMM / 2
+	}
+
+	// packDeck packs one bed as a single deck, or as lower+upper decks when
+	// double-deck is requested (lower fills first, then the upper deck).
+	packDeck := func(items []PackedPallet, length, width int, isTrailer bool) ([]PackedPallet, []PackedPallet) {
+		if !req.DoubleDeck {
+			return packBed(items, length, width, t.BedHeightMM, isTrailer, 0)
+		}
+		lower, rem := packBed(items, length, width, deckClear, isTrailer, 0)
+		upper, rem2 := packBed(rem, length, width, t.BedHeightMM-deckClear, isTrailer, deckClear)
+		return append(lower, upper...), rem2
+	}
+
 	if !t.IsTandem {
-		packed, unpacked = packBed(rawPallets, t.BedLengthMM, t.BedWidthMM, t.BedHeightMM, false)
+		packed, unpacked = packDeck(rawPallets, t.BedLengthMM, t.BedWidthMM, false)
 	} else {
-		truckPacked, remaining := packBed(rawPallets, t.BedLengthMM, t.BedWidthMM, t.BedHeightMM, false)
-		trailerPacked, stillRemaining := packBed(remaining, t.TrailerLengthMM, t.BedWidthMM, t.BedHeightMM, true)
-		
+		truckPacked, remaining := packDeck(rawPallets, t.BedLengthMM, t.BedWidthMM, false)
+		trailerPacked, stillRemaining := packDeck(remaining, t.TrailerLengthMM, t.BedWidthMM, true)
+
 		packed = append(packed, truckPacked...)
 		packed = append(packed, trailerPacked...)
 		unpacked = stillRemaining
@@ -3225,7 +3251,11 @@ func handleOptimizeLoad(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func packBed(pallets []PackedPallet, bedLength, bedWidth, bedHeight int, isTrailer bool) ([]PackedPallet, []PackedPallet) {
+// packBed shelf-packs pallets onto one deck. deckHeight is the clear height
+// available for this deck; pallets taller than it are rejected. zOffset is the
+// floor height of this deck (0 for the lower/only deck, deckClearance for an
+// upper deck), so the same routine packs both decks of a double-decker.
+func packBed(pallets []PackedPallet, bedLength, bedWidth, deckHeight int, isTrailer bool, zOffset int) ([]PackedPallet, []PackedPallet) {
 	var packed []PackedPallet = []PackedPallet{}
 	var unpacked []PackedPallet = []PackedPallet{}
 
@@ -3234,9 +3264,14 @@ func packBed(pallets []PackedPallet, bedLength, bedWidth, bedHeight int, isTrail
 	maxShelfH := 0
 
 	for _, p := range pallets {
+		if p.Height > deckHeight {
+			// too tall to sit on this deck
+			unpacked = append(unpacked, p)
+			continue
+		}
 		w, l := p.Width, p.Length
 		rotated := false
-		
+
 		if currentY + w <= bedWidth && currentX + l <= bedLength {
 			// fits non-rotated
 		} else if currentY + l <= bedWidth && currentX + w <= bedLength {
@@ -3246,7 +3281,7 @@ func packBed(pallets []PackedPallet, bedLength, bedWidth, bedHeight int, isTrail
 			currentX += maxShelfH
 			currentY = 0
 			maxShelfH = 0
-			
+
 			if currentX + l <= bedLength && w <= bedWidth {
 				// fits non-rotated
 			} else if currentX + w <= bedLength && l <= bedWidth {
@@ -3257,17 +3292,17 @@ func packBed(pallets []PackedPallet, bedLength, bedWidth, bedHeight int, isTrail
 				continue
 			}
 		}
-		
+
 		p.X = currentX
 		p.Y = currentY
-		p.Z = 0
+		p.Z = zOffset
 		p.Length = l
 		p.Width = w
 		p.Rotated = rotated
 		p.IsTrailer = isTrailer
-		
+
 		packed = append(packed, p)
-		
+
 		currentY += w
 		if l > maxShelfH {
 			maxShelfH = l
@@ -3280,16 +3315,20 @@ func packBed(pallets []PackedPallet, bedLength, bedWidth, bedHeight int, isTrail
 
 	stackIdx := 0
 	for _, p := range unpacked {
+		if p.Height > deckHeight {
+			stillUnpacked = append(stillUnpacked, p)
+			continue
+		}
 		stacked := false
 		for i := stackIdx; i < len(packed); i++ {
 			bottom := packed[i]
-			if bottom.Length == p.Length && bottom.Width == p.Width && bottom.Height + p.Height <= bedHeight {
+			if bottom.Length == p.Length && bottom.Width == p.Width && bottom.Height + p.Height <= deckHeight {
 				p.X = bottom.X
 				p.Y = bottom.Y
-				p.Z = bottom.Height
+				p.Z = zOffset + bottom.Height
 				p.Rotated = bottom.Rotated
 				p.IsTrailer = isTrailer
-				
+
 				finalPacked = append(finalPacked, p)
 				stacked = true
 				stackIdx = i + 1
