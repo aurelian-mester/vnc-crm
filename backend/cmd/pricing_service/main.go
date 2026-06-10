@@ -94,6 +94,8 @@ type CalculationRequest struct {
 	TargetMargin              float64 `json:"target_margin"` // Sales margin % used to derive price from cost (margin pyramid)
 	CustomerPriceGroup        string  `json:"customer_price_group"`
 	CustomerID                string  `json:"customer_id"`
+	FefcoCode                 string  `json:"fefco_code"`
+	LidMaterial               string  `json:"lid_material"` // optional: separate board grade for the lid of two-piece styles
 	ToolingPrintingPlatesCost float64 `json:"tooling_printing_plates_cost"`
 	ToolingDieCutMoldsCost    float64 `json:"tooling_die_cut_molds_cost"`
 	ToolingAmortizationVolume int     `json:"tooling_amortization_volume"`
@@ -334,22 +336,16 @@ func calculateStandardProductUnitPrice(req CalculationRequest, q int) float64 {
 	return unitPrice
 }
 
-func calculatePricingDetails(req CalculationRequest, q int) (materialPrice, setupCost, runCost, toolingCost, totalPrice, finalPrice, unitPrice float64) {
-	if q <= 0 {
-		return 0, 0, 0, 0, 0, 0, 0
-	}
+// resolveBoardRate returns the €/m² rate for a board grade, preferring the
+// customer's price list, then the price-group list, then the catalog, then
+// static defaults.
+func resolveBoardRate(material, customerID, priceGroup string, q int) float64 {
+	rate := 0.50
 
-	// Surface Area in square meters (approx for a box: 2*(L*W + L*H + W*H))
-	surfaceArea := 2 * (req.Length*req.Width + req.Length*req.Height + req.Width*req.Height) / 1000000.0
-
-	materialPricePerSQM := 0.50
-	priceFound := false
-
-	// Attempt to get price from price list lines if customer_id is set
-	if db != nil && req.CustomerID != "" {
+	if db != nil && customerID != "" {
 		var customPrice float64
 		err := db.QueryRow(`
-			SELECT pll.unit_price 
+			SELECT pll.unit_price
 			FROM price_list_lines pll
 			JOIN price_lists pl ON pll.price_list_code = pl.code
 			WHERE ((pl.assign_to_no = $1 AND pl.assign_to_type = 'Customer') OR pl.assign_to_type = 'All Customers')
@@ -358,50 +354,89 @@ func calculatePricingDetails(req CalculationRequest, q int) (materialPrice, setu
 			  AND (pl.starting_date IS NULL OR pl.starting_date <= CURRENT_DATE)
 			  AND (pl.ending_date IS NULL OR pl.ending_date >= CURRENT_DATE)
 			ORDER BY (CASE WHEN pl.assign_to_type = 'Customer' THEN 1 ELSE 2 END), pll.min_quantity DESC
-			LIMIT 1`, req.CustomerID, req.Material, q).Scan(&customPrice)
+			LIMIT 1`, customerID, material, q).Scan(&customPrice)
 		if err == nil && customPrice > 0 {
-			materialPricePerSQM = customPrice
-			priceFound = true
+			return customPrice
 		}
 	}
 
-	// Attempt to get price from price list lines if customer price group is set (legacy fallback)
-	if !priceFound && db != nil && req.CustomerPriceGroup != "" {
+	if db != nil && priceGroup != "" {
 		var customPrice float64
 		err := db.QueryRow(`
-			SELECT unit_price 
-			FROM price_list_lines 
+			SELECT unit_price
+			FROM price_list_lines
 			WHERE price_list_code = $1 AND product_no = $2 AND min_quantity <= $3
-			ORDER BY min_quantity DESC LIMIT 1`, req.CustomerPriceGroup, req.Material, q).Scan(&customPrice)
+			ORDER BY min_quantity DESC LIMIT 1`, priceGroup, material, q).Scan(&customPrice)
 		if err == nil && customPrice > 0 {
-			materialPricePerSQM = customPrice
-			priceFound = true
+			return customPrice
 		}
 	}
 
-	if !priceFound && db != nil {
+	if db != nil {
 		var dbPrice float64
-		err := db.QueryRow("SELECT unit_price FROM products WHERE id = $1 OR description = $1", req.Material).Scan(&dbPrice)
+		err := db.QueryRow("SELECT unit_price FROM products WHERE id = $1 OR description = $1", material).Scan(&dbPrice)
 		if err == nil && dbPrice > 0 {
-			materialPricePerSQM = dbPrice
-			priceFound = true
+			return dbPrice
 		}
 	}
 
-	if !priceFound {
-		switch req.Material {
-		case "Testliner":
-			materialPricePerSQM = 0.80
-		case "Schrenz":
-			materialPricePerSQM = 0.60
-		case "Wellenstoff":
-			materialPricePerSQM = 0.70
+	switch material {
+	case "Testliner":
+		rate = 0.80
+	case "Schrenz":
+		rate = 0.60
+	case "Wellenstoff":
+		rate = 0.70
+	}
+	return rate
+}
+
+// lidAreaSQM returns the board area (m²) of the separate lid piece for
+// two-piece FEFCO styles; 0 for one-piece styles. Dimensions are in mm.
+func lidAreaSQM(fefco string, length, width, height float64) float64 {
+	switch strings.TrimPrefix(strings.TrimSpace(fefco), "0") {
+	case "300": // telescopic cap: top panel + shallow rims
+		rim := 0.24 * height
+		if rim < 40 {
+			rim = 40
+		}
+		return (length*width + 2*rim*(length+width)) / 1000000.0
+	case "301": // full telescope: lid is nearly a second box shell
+		rim := 0.96 * height
+		return (length*width + 2*rim*(length+width)) / 1000000.0
+	case "501": // slide box: outer sleeve is a four-panel tube
+		return 2 * length * (width + height) / 1000000.0
+	}
+	return 0
+}
+
+func calculatePricingDetails(req CalculationRequest, q int) (materialPrice, setupCost, runCost, toolingCost, totalPrice, finalPrice, unitPrice float64) {
+	if q <= 0 {
+		return 0, 0, 0, 0, 0, 0, 0
+	}
+
+	// Surface Area in square meters (approx for a box: 2*(L*W + L*H + W*H))
+	surfaceArea := 2 * (req.Length*req.Width + req.Length*req.Height + req.Width*req.Height) / 1000000.0
+
+	materialPricePerSQM := resolveBoardRate(req.Material, req.CustomerID, req.CustomerPriceGroup, q)
+
+	// Two-piece styles may use a different board grade for the lid/sleeve:
+	// its area is then priced at that grade's rate on top of the body area.
+	// (Only applied when the client sends lid_material, so legacy requests
+	// keep their previous totals.)
+	lidArea := 0.0
+	lidRate := materialPricePerSQM
+	if req.LidMaterial != "" {
+		lidArea = lidAreaSQM(req.FefcoCode, req.Length, req.Width, req.Height)
+		if lidArea > 0 && req.LidMaterial != req.Material {
+			lidRate = resolveBoardRate(req.LidMaterial, req.CustomerID, req.CustomerPriceGroup, q)
 		}
 	}
 
 	// Trim factor
 	trimFactor := 0.05
 	grossSheetArea := surfaceArea * (1.0 + trimFactor)
+	grossLidArea := lidArea * (1.0 + trimFactor)
 
 	// Machine Speed Run Speeds (synced with handleGetSpecs logic)
 	runSpeed := 6000.0
@@ -426,9 +461,10 @@ func calculatePricingDetails(req CalculationRequest, q int) (materialPrice, setu
 	}
 	totalWaste := wasteQty + int(runningWaste)
 
-	// Material Price including setup waste and running waste sheets
+	// Material Price including setup waste and running waste sheets; the lid
+	// piece (when a separate grade is requested) is priced at its own rate.
 	totalSheetsNeeded := float64(q) + float64(totalWaste)
-	materialPrice = totalSheetsNeeded * grossSheetArea * materialPricePerSQM
+	materialPrice = totalSheetsNeeded * (grossSheetArea*materialPricePerSQM + grossLidArea*lidRate)
 
 	// Setup times & costs
 	corrugatorSetupTime := 15.0
@@ -727,12 +763,13 @@ func getLocalCustomerProducts(customerID, search, category string) ([]Product, e
 // CustomProductRequest describes a configured custom box that should be
 // materialized as a real product record so quote lines can reference it.
 type CustomProductRequest struct {
-	FefcoCode string  `json:"fefco_code"`
-	Length    float64 `json:"length"`
-	Width     float64 `json:"width"`
-	Height    float64 `json:"height"`
-	Material  string  `json:"material"`
-	FluteType string  `json:"flute_type"`
+	FefcoCode   string  `json:"fefco_code"`
+	Length      float64 `json:"length"`
+	Width       float64 `json:"width"`
+	Height      float64 `json:"height"`
+	Material    string  `json:"material"`
+	FluteType   string  `json:"flute_type"`
+	LidMaterial string  `json:"lid_material"`
 }
 
 // handleCustomProduct deterministically derives a product code from the box
@@ -770,6 +807,9 @@ func handleCustomProduct(w http.ResponseWriter, r *http.Request) {
 		id = id[:50]
 	}
 	desc := fmt.Sprintf("Custom Box FEFCO %s %dx%dx%dmm %s-flute %s", fefco, int(req.Length), int(req.Width), int(req.Height), flute, req.Material)
+	if req.LidMaterial != "" && req.LidMaterial != req.Material {
+		desc += fmt.Sprintf(" / lid %s", req.LidMaterial)
+	}
 	if len(desc) > 255 {
 		desc = desc[:255]
 	}
