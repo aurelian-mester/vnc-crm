@@ -25,6 +25,10 @@ interface PricingResult {
   tiers: PriceTier[];
 }
 
+// FEFCO styles made of two separate pieces (tray + telescopic lid / sleeve),
+// where the lid piece can be ordered in a different board grade.
+const TWO_PIECE_STYLES = ['300', '301', '501'];
+
 interface SpecsResult {
   caliper: number;
   grammage: number;
@@ -84,12 +88,20 @@ const ProductConfigurator: React.FC = () => {
     stapling: false,
     discount: 0,
     fefco_code: '201',
+    lid_material: '', // '' = same board as the body; only used by two-piece styles
     flute_type: 'B',
     tooling_printing_plates_cost: 0,
     tooling_die_cut_molds_cost: 0,
     tooling_amortization_volume: 10000,
     amortize_tooling: false
   });
+
+  // Effective lid board grade: only two-piece styles have a separate lid;
+  // empty selection means "same as body" and is resolved here so pricing is
+  // consistent regardless of how the user expressed it.
+  const effectiveLidMaterial = TWO_PIECE_STYLES.includes(params.fefco_code)
+    ? (params.lid_material || params.material)
+    : '';
 
   const [result, setResult] = useState<PricingResult | null>(null);
   const [margins, setMargins] = useState<any[]>([]);
@@ -305,6 +317,11 @@ const ProductConfigurator: React.FC = () => {
                 <span class="spec-label">${locale === 'ro' ? 'Compoziție Material' : 'Material Grade'}:</span>
                 <span class="spec-val">${params.material}</span>
               </div>
+              ${effectiveLidMaterial && effectiveLidMaterial !== params.material ? `
+              <div class="spec-row">
+                <span class="spec-label">${locale === 'ro' ? 'Material Capac / Manșon' : 'Lid / Sleeve Material'}:</span>
+                <span class="spec-val">${effectiveLidMaterial}</span>
+              </div>` : ''}
               <div class="spec-row">
                 <span class="spec-label">${locale === 'ro' ? 'Tip Ondulă / Structură' : 'Flute Type / Structure'}:</span>
                 <span class="spec-val">${params.flute_type} ${locale === 'ro' ? 'Ondulă' : 'Flute'}</span>
@@ -421,7 +438,7 @@ const ProductConfigurator: React.FC = () => {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ ...params, target_margin: targetMargin })
+      body: JSON.stringify({ ...params, lid_material: effectiveLidMaterial, target_margin: targetMargin })
     })
     .then(res => res.json())
     .then(data => setResult(data))
@@ -629,7 +646,8 @@ const ProductConfigurator: React.FC = () => {
           width: params.width,
           height: params.height,
           material: params.material,
-          flute_type: params.flute_type
+          flute_type: params.flute_type,
+          lid_material: effectiveLidMaterial
         })
       });
       if (pres.ok) {
@@ -648,7 +666,7 @@ const ProductConfigurator: React.FC = () => {
 
       return {
         product_id: customProductId,
-        description: `Custom Box FEFCO ${params.fefco_code} (${params.length}x${params.width}x${params.height} mm) ${params.material}`,
+        description: `Custom Box FEFCO ${params.fefco_code} (${params.length}x${params.width}x${params.height} mm) ${params.material}${effectiveLidMaterial && effectiveLidMaterial !== params.material ? ` / ${locale === 'ro' ? 'capac' : 'lid'} ${effectiveLidMaterial}` : ''}`,
         quantity: qty,
         unit_price: price,
         config_params: JSON.stringify({
@@ -656,6 +674,7 @@ const ProductConfigurator: React.FC = () => {
           width: params.width,
           height: params.height,
           material: params.material,
+          lid_material: effectiveLidMaterial,
           fefco_code: params.fefco_code,
           flute_type: params.flute_type,
           printing: params.printing,
@@ -754,6 +773,7 @@ const ProductConfigurator: React.FC = () => {
                   stapling={params.stapling}
                   foldPercent={foldPercent}
                   fefcoCode={params.fefco_code}
+                  lidMaterial={effectiveLidMaterial || undefined}
                   printColor={printColor}
                   printText={printText}
                   hasRecycling={printSymbols.recycling}
@@ -1596,10 +1616,14 @@ const ProductConfigurator: React.FC = () => {
               <option value="200">FEFCO 200 (Half Slotted Open Box)</option>
               <option value="202">FEFCO 202 (Partial Overlap Slotted)</option>
               <option value="203">FEFCO 203 (Fully Overlapping Flaps)</option>
+              <option value="204">FEFCO 204 (Centre Special Slotted)</option>
               <option value="300">FEFCO 300 (Telescopic Lid & Tray)</option>
               <option value="301">FEFCO 301 (Full Telescope Box)</option>
               <option value="427">FEFCO 427 (Die-Cut Mailer)</option>
               <option value="410">FEFCO 410 (Wrap-Around Folder)</option>
+              <option value="421">FEFCO 421 (Die-Cut Four-Corner Tray)</option>
+              <option value="501">FEFCO 501 (Slide Box: Sleeve & Tray)</option>
+              <option value="711">FEFCO 711 (Crash-Lock Bottom)</option>
             </select>
           </div>
 
@@ -1611,6 +1635,21 @@ const ProductConfigurator: React.FC = () => {
               <option value="Wellenstoff">Wellenstoff</option>
             </select>
           </div>
+
+          {/* Two-piece styles (tray + lid / sleeve) can use a different board for the lid */}
+          {TWO_PIECE_STYLES.includes(params.fefco_code) && (
+            <div style={{ marginTop: '15px' }}>
+              <label style={{ fontSize: '0.8rem', color: '#666' }}>
+                {locale === 'ro' ? 'Material Capac / Manșon' : 'Lid / Sleeve Material'}
+              </label>
+              <select value={params.lid_material} onChange={e => setParams({...params, lid_material: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
+                <option value="">{locale === 'ro' ? 'Același ca și corpul' : 'Same as body'}</option>
+                <option value="Testliner">Testliner</option>
+                <option value="Schrenz">Schrenz</option>
+                <option value="Wellenstoff">Wellenstoff</option>
+              </select>
+            </div>
+          )}
 
           <div style={{ marginTop: '15px' }}>
             <label style={{ fontSize: '0.8rem', color: '#666' }}>{t('flute_type_structure')}</label>

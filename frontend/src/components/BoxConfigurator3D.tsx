@@ -368,9 +368,10 @@ const Flap: React.FC<FlapProps> = ({ wallH, width, depth, fold, edge, liftLayers
 // ---------------------------------------------------------------------------
 interface SlottedProps {
   L: number; W: number; H: number;
-  style: string; // '200' | '201' | '202' | '203' | '300' | '301'
+  style: string; // '200' | '201' | '202' | '203' | '204' | '300' | '301'
   p: number;
   tex: TexSet;
+  lidTex: TexSet;
   printCoverageBack: boolean;
   printCoverageSide: boolean;
   withHandles: boolean;
@@ -378,7 +379,7 @@ interface SlottedProps {
   stapling: boolean;
 }
 
-const SlottedBox: React.FC<SlottedProps> = ({ L, W, H, style, p, tex, printCoverageBack, printCoverageSide, withHandles, gluing, stapling }) => {
+const SlottedBox: React.FC<SlottedProps> = ({ L, W, H, style, p, tex, lidTex, printCoverageBack, printCoverageSide, withHandles, gluing, stapling }) => {
   const fW = stage(p, 0, 0.5);
   const fMin = stage(p, 0.5, 0.74);
   const overlapping = style === '202' || style === '203';
@@ -387,12 +388,13 @@ const SlottedBox: React.FC<SlottedProps> = ({ L, W, H, style, p, tex, printCover
   const fMaj1 = overlapping ? stage(p, 0.74, 0.87) : stage(p, 0.74, 1);
   const fMaj2 = overlapping ? stage(p, 0.87, 1) : fMaj1;
 
-  const minD = Math.min(W / 2, L / 2) - GAP;
+  // 0204: the inner flaps are lengthened so they also meet at the centre.
+  const minD = (style === '204' ? L / 2 : Math.min(W / 2, L / 2)) - GAP;
   const overlap = Math.min(W * 0.3, Math.max(0.3, W * 0.25));
   const majD = style === '203' ? W - 2 * SLOT
     : style === '202' ? Math.min((W + overlap) / 2, W - 0.1)
     : W / 2 - GAP;
-  const hasTop = style === '201' || style === '202' || style === '203';
+  const hasTop = style === '201' || style === '202' || style === '203' || style === '204';
 
   const wallAngle = -HALF_PI * fW;
 
@@ -476,31 +478,31 @@ const SlottedBox: React.FC<SlottedProps> = ({ L, W, H, style, p, tex, printCover
         </group>
       </group>
 
-      {/* Telescopic lid for 0300/0301 */}
+      {/* Telescopic lid for 0300/0301 — rendered with its own board grade */}
       {isScope && (
         <group position={[0, lidY, 0]} rotation={[lidCounterTilt, 0, 0]}>
           <group rotation={[HALF_PI, 0, 0]}>
-            <Panel w={lidL} h={lidW} tex={tex} face="plain" flute="h" />
+            <Panel w={lidL} h={lidW} tex={lidTex} face="plain" flute="h" />
           </group>
           {/* four rims: hang down when closed (angle 0), splay flat when open */}
           <group position={[0, 0, lidW / 2]} rotation={[-lidRimAngle, 0, 0]}>
             <group position={[0, -rimH / 2, 0]}>
-              <Panel w={lidL} h={rimH} tex={tex} face="plain" flute="h" />
+              <Panel w={lidL} h={rimH} tex={lidTex} face="plain" flute="h" />
             </group>
           </group>
           <group position={[0, 0, -lidW / 2]} rotation={[lidRimAngle, 0, 0]}>
             <group position={[0, -rimH / 2, 0]}>
-              <Panel w={lidL} h={rimH} tex={tex} face="plain" flute="h" />
+              <Panel w={lidL} h={rimH} tex={lidTex} face="plain" flute="h" />
             </group>
           </group>
           <group position={[lidL / 2, 0, 0]} rotation={[0, 0, lidRimAngle]}>
             <group position={[0, -rimH / 2, 0]} rotation={[0, HALF_PI, 0]}>
-              <Panel w={lidW - 2 * SLOT} h={rimH} tex={tex} face="plain" flute="h" />
+              <Panel w={lidW - 2 * SLOT} h={rimH} tex={lidTex} face="plain" flute="h" />
             </group>
           </group>
           <group position={[-lidL / 2, 0, 0]} rotation={[0, 0, -lidRimAngle]}>
             <group position={[0, -rimH / 2, 0]} rotation={[0, HALF_PI, 0]}>
-              <Panel w={lidW - 2 * SLOT} h={rimH} tex={tex} face="plain" flute="h" />
+              <Panel w={lidW - 2 * SLOT} h={rimH} tex={lidTex} face="plain" flute="h" />
             </group>
           </group>
         </group>
@@ -521,7 +523,7 @@ interface OnePieceProps {
   printCoverageSide: boolean;
 }
 
-const MailerBox: React.FC<OnePieceProps> = ({ L, W, H, p, tex, printCoverageSide }) => {
+const MailerBox: React.FC<OnePieceProps & { withLid?: boolean }> = ({ L, W, H, p, tex, printCoverageSide, withLid = true }) => {
   const fSide = stage(p, 0, 0.28);
   const fTab = stage(p, 0.28, 0.44);
   const fFB = stage(p, 0.44, 0.6);
@@ -573,7 +575,8 @@ const MailerBox: React.FC<OnePieceProps> = ({ L, W, H, p, tex, printCoverageSide
       <group position={[0, 0, -W / 2]} rotation={[-HALF_PI * (1 - fFB), 0, 0]}>
         <group position={[0, H / 2, 0]}>
           <Panel w={L} h={H} tex={tex} face="plain" flute="v" />
-          {/* lid hinged on the back wall's top edge */}
+          {/* lid hinged on the back wall's top edge (absent on 0421 trays) */}
+          {withLid && (
           <group position={[0, H / 2 + 0.012 * fLid, 0]} rotation={[HALF_PI * fLid, 0, 0]}>
             <group position={[0, lidDepth / 2, 0]}>
               <Panel w={lidWidth} h={lidDepth} tex={tex} face="plain" flute="h" />
@@ -593,6 +596,7 @@ const MailerBox: React.FC<OnePieceProps> = ({ L, W, H, p, tex, printCoverageSide
               </group>
             </group>
           </group>
+          )}
         </group>
       </group>
     </group>
@@ -644,6 +648,150 @@ const WrapBox: React.FC<OnePieceProps> = ({ L, W, H, p, tex, printCoverageSide }
       </group>
       {wall(1, fFB, fA, 0, true)}
       {wall(-1, fFB, fB, 1, false)}
+    </group>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// FEFCO 0501 slide box: an inner tray that slides into an outer sleeve
+// (matchbox style). Two pieces — the sleeve renders with the lid board grade.
+// Stages: tray walls rise, the sleeve blank wraps into a tube beside it,
+// then the sleeve travels over and slides onto the tray, leaving the tray
+// pulled out ~1/3 so both pieces stay visible.
+// ---------------------------------------------------------------------------
+const SleeveBox: React.FC<OnePieceProps & { lidTex: TexSet }> = ({ L, W, H, p, tex, lidTex, printCoverageSide }) => {
+  const fTray = stage(p, 0, 0.3);
+  const fWrapS = stage(p, 0.3, 0.5);   // sleeve side panels up
+  const fWrapT = stage(p, 0.5, 0.62);  // sleeve top closes the tube
+  const fDesc = stage(p, 0.62, 0.8);   // sleeve travels next to the tray
+  const fSlide = stage(p, 0.8, 1);     // sleeve slides onto the tray
+
+  const c = 0.06 + T;       // sleeve clearance over the tray
+  const Ws = W + 2 * c;     // sleeve panel spans
+  const Hs = H + 2 * c;
+  const Ls = L * 0.98;
+  const baseY = -H / 2 + T / 2;
+
+  // sleeve root: flat beside the tray blank → beside the tray → slid on
+  const zFlat = W / 2 + H + Ws / 2 + 0.8;
+  const ySeat = -(H / 2 + c) + T / 2;
+  const sx = (L * 0.85) * fDesc - (L * 0.55) * fSlide;
+  const sy = baseY + (ySeat - baseY) * fDesc;
+  const sz = zFlat * (1 - fDesc);
+
+  return (
+    <group position={[0, baseY, 0]}>
+      {/* tray bottom */}
+      <group rotation={[HALF_PI, 0, 0]}>
+        <Panel w={L} h={W} tex={tex} face="plain" flute="h" />
+      </group>
+      {/* tray side walls */}
+      {[1, -1].map(s => (
+        <group key={'tsw' + s} position={[s * L / 2, 0, 0]} rotation={[0, 0, s * -HALF_PI * (1 - fTray)]}>
+          <group position={[0, H / 2, 0]} rotation={[0, HALF_PI, 0]}>
+            <Panel w={W - 2 * SLOT} h={H} tex={tex} face={printCoverageSide ? 'side' : 'plain'} flute="v" />
+          </group>
+        </group>
+      ))}
+      {/* tray front/back walls */}
+      {[1, -1].map(zs => (
+        <group key={'tfb' + zs} position={[0, 0, zs * W / 2]} rotation={[zs * HALF_PI * (1 - fTray), 0, 0]}>
+          <group position={[0, H / 2, 0]}>
+            <Panel w={L} h={H} tex={tex} face={zs === 1 ? 'front' : 'plain'} flute="v" />
+          </group>
+        </group>
+      ))}
+
+      {/* sleeve (origin at its bottom panel centre, in tray-local space) */}
+      <group position={[sx, sy - baseY, sz]}>
+        <group rotation={[HALF_PI, 0, 0]}>
+          <Panel w={Ls} h={Ws} tex={lidTex} face="plain" flute="h" />
+        </group>
+        {/* sleeve sides fold up */}
+        {[1, -1].map(zs => (
+          <group key={'ss' + zs} position={[0, 0, zs * Ws / 2]} rotation={[zs * HALF_PI * (1 - fWrapS), 0, 0]}>
+            <group position={[0, Hs / 2, 0]}>
+              <Panel w={Ls} h={Hs} tex={lidTex} face="plain" flute="v" />
+              {/* the top panel hinges on the +z side wall and closes the tube */}
+              {zs === 1 && (
+                <group position={[0, Hs / 2, 0]} rotation={[-HALF_PI * fWrapT, 0, 0]}>
+                  <group position={[0, Ws / 2, 0]}>
+                    <Panel w={Ls} h={Ws} tex={lidTex} face="plain" flute="h" />
+                  </group>
+                </group>
+              )}
+            </group>
+          </group>
+        ))}
+      </group>
+    </group>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// FEFCO 0711 crash-lock (automatic) bottom box. Delivered glued and
+// flat-folded: the tube cross-section is a parallelogram that pops from
+// fully collapsed (180°/0° hinges) to square, while the pre-glued bottom
+// panels swing shut on their own. Top closes like a slotted box.
+// ---------------------------------------------------------------------------
+interface CrashLockProps {
+  L: number; W: number; H: number;
+  p: number;
+  tex: TexSet;
+  printCoverageBack: boolean;
+  printCoverageSide: boolean;
+}
+
+const CrashLockBox: React.FC<CrashLockProps> = ({ L, W, H, p, tex, printCoverageBack, printCoverageSide }) => {
+  const fPop = stage(p, 0, 0.5);
+  // Parallelogram hinge pair: collapsed = (180°, 0°), erected = (90°, 90°).
+  const hingeA = Math.PI - HALF_PI * fPop;
+  const hingeB = HALF_PI * fPop;
+
+  const fMinT = stage(p, 0.55, 0.78);
+  const fMajT = stage(p, 0.78, 1);
+  const minD = Math.min(W / 2, L / 2) - GAP;
+  const majD = W / 2 - GAP;
+  // The crash-lock bottom is driven by the pop itself.
+  const fBot = fPop;
+  const mainD = Math.min(W * 0.62, W - 0.1);
+  const stubD = W * 0.28;
+
+  return (
+    <group>
+      {/* FRONT (anchor) */}
+      <group position={[0, 0, (W / 2) * fPop + T * (1 - fPop)]}>
+        <Panel w={L} h={H} tex={tex} face="front" flute="v" />
+        <Flap wallH={H} width={L - 2 * SLOT} depth={majD} fold={fMajT} edge="top" liftLayers={1} tex={tex} />
+        <Flap wallH={H} width={L - 2 * SLOT} depth={mainD} fold={fBot} edge="bottom" liftLayers={1} tex={tex} />
+
+        {/* RIGHT */}
+        <group position={[L / 2, 0, 0]} rotation={[0, hingeA, 0]}>
+          <group position={[W / 2, 0, 0]}>
+            <Panel w={W} h={H} tex={tex} face={printCoverageSide ? 'side' : 'plain'} flute="v" />
+            <Flap wallH={H} width={W - 2 * SLOT} depth={minD} fold={fMinT} edge="top" liftLayers={0} tex={tex} />
+            <Flap wallH={H} width={W - 2 * SLOT} depth={stubD} fold={fBot * 0.95} edge="bottom" liftLayers={0} tex={tex} />
+          </group>
+
+          {/* BACK */}
+          <group position={[W, 0, 0]} rotation={[0, hingeB, 0]}>
+            <group position={[L / 2, 0, 0]}>
+              <Panel w={L} h={H} tex={tex} face={printCoverageBack ? 'front' : 'plain'} flute="v" />
+              <Flap wallH={H} width={L - 2 * SLOT} depth={majD} fold={fMajT} edge="top" liftLayers={1} tex={tex} />
+              <Flap wallH={H} width={L - 2 * SLOT} depth={mainD} fold={fBot} edge="bottom" liftLayers={2} tex={tex} />
+            </group>
+          </group>
+        </group>
+
+        {/* LEFT */}
+        <group position={[-L / 2, 0, 0]} rotation={[0, -hingeB, 0]}>
+          <group position={[-W / 2, 0, 0]}>
+            <Panel w={W} h={H} tex={tex} face={printCoverageSide ? 'side' : 'plain'} flute="v" />
+            <Flap wallH={H} width={W - 2 * SLOT} depth={minD} fold={fMinT} edge="top" liftLayers={0} tex={tex} />
+            <Flap wallH={H} width={W - 2 * SLOT} depth={stubD} fold={fBot * 0.95} edge="bottom" liftLayers={0} tex={tex} />
+          </group>
+        </group>
+      </group>
     </group>
   );
 };
@@ -710,7 +858,8 @@ interface BoxConfigProps {
   gluing?: boolean;
   stapling?: boolean;
   foldPercent?: number;
-  fefcoCode?: string; // '200'|'201'|'202'|'203'|'300'|'301'|'427'|'410'
+  fefcoCode?: string; // '200'|'201'|'202'|'203'|'204'|'300'|'301'|'427'|'410'|'421'|'501'|'711'
+  lidMaterial?: string; // separate board grade for the lid/sleeve of two-piece styles
   printColor?: string;
   printText?: string;
   hasRecycling?: boolean;
@@ -732,6 +881,7 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   stapling = false,
   foldPercent = 1.0,
   fefcoCode = '201',
+  lidMaterial = '',
   printColor = '#1a365d',
   printText = 'VRANCART',
   hasRecycling = false,
@@ -764,6 +914,15 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
     printedFront: printing ? tex.printedFront : tex.plain,
     printedSide: printing && printCoverage === 'all' ? tex.printedSide : tex.plain,
   }), [tex, printing, printCoverage]);
+
+  // Separate texture set for the lid/sleeve of two-piece styles; lids are
+  // never printed, so both face slots resolve to its plain kraft.
+  const lidTexRaw = useCardboardTextures(lidMaterial || material, false, printColor, printText, false, false, false, null, 1, 1);
+  const lidTexSet: TexSet = useMemo(() => ({
+    ...lidTexRaw,
+    printedFront: lidTexRaw.plain,
+    printedSide: lidTexRaw.plain,
+  }), [lidTexRaw]);
   const coverBack = printing && (printCoverage === 'front-back' || printCoverage === 'all');
   const coverSide = printing && printCoverage === 'all';
 
@@ -771,7 +930,7 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   const p = Math.min(1, Math.max(0, numericFold));
 
   const style = fefcoCode || '201';
-  const bottomAnchored = style === '427' || style === '410';
+  const bottomAnchored = style === '427' || style === '410' || style === '421' || style === '501';
   const isScope = style === '300' || style === '301';
 
   const fW = stage(p, 0, 0.5);
@@ -787,41 +946,56 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   // hang below the box and the tilting blank sweeps below its pivot, so a
   // fixed floor would slice through them. Tracking the live lower bound
   // keeps the shadow hugging the cardboard at every fold stage instead.
-  const gMinD = Math.min(W / 2, L / 2) - GAP;
+  const gMinD = (style === '204' ? L / 2 : Math.min(W / 2, L / 2)) - GAP;
   const gOverlap = Math.min(W * 0.3, Math.max(0.3, W * 0.25));
   const gMajD = style === '203' ? W - 2 * SLOT
     : style === '202' ? Math.min((W + gOverlap) / 2, W - 0.1)
+    : style === '711' ? Math.min(W * 0.62, W - 0.1)
     : W / 2 - GAP;
   const gBotMax = Math.max(gMinD, gMajD);
   const gOverlapping = style === '202' || style === '203';
   const gFMin = stage(p, 0.5, 0.74);
   const gFM1 = gOverlapping ? stage(p, 0.74, 0.87) : stage(p, 0.74, 1);
   const gFM2 = gOverlapping ? stage(p, 0.87, 1) : gFM1;
-  const depthBelow = fW < 1
-    ? T / 2 + (H / 2 + gBotMax) * Math.cos(HALF_PI * (1 - fW)) + 2 * T * fW
-    : H / 2 + Math.max(gMinD * Math.cos(HALF_PI * gFMin), gMajD * Math.cos(HALF_PI * gFM1), gMajD * Math.cos(HALF_PI * gFM2)) + 2 * T;
-  const floorY = bottomAnchored ? groundY : Math.min(groundY, groupY - depthBelow - 0.004);
+  const depthBelow = style === '711' && fW >= 1
+    ? H / 2 + 3 * T // crash-lock bottom is already shut once the tube is erected
+    : fW < 1
+      ? T / 2 + (H / 2 + gBotMax) * Math.cos(HALF_PI * (1 - fW)) + 2 * T * fW
+      : H / 2 + Math.max(gMinD * Math.cos(HALF_PI * gFMin), gMajD * Math.cos(HALF_PI * gFM1), gMajD * Math.cos(HALF_PI * gFM2)) + 2 * T;
+  const floorY = bottomAnchored
+    ? groundY - (style === '501' ? 0.1 * stage(p, 0.8, 1) : 0) // sleeve wraps slightly below the tray bottom
+    : Math.min(groundY, groupY - depthBelow - 0.004);
 
   // Camera fit: interpolates between the flat-blank footprint and the folded
   // box extent as the slider moves.
   const majDFit = style === '203' ? W : style === '202' ? W * 0.65 : W / 2;
   const flatExtent = bottomAnchored
-    ? Math.max(L + 2 * H + 2, 2 * W + 3 * H + 1)
-    : Math.max(2 * L + 2 * W + 1.2, H + 2 * majDFit + 0.5) + (isScope ? (W + 2) : 0);
+    ? (style === '501'
+      ? Math.max(L + 2 * H + 2, 2.5 * W + 2 * H + 4) // tray cross + sleeve strip beside it
+      : Math.max(L + 2 * H + 2, 2 * W + 3 * H + 1))
+    : style === '711'
+      ? Math.max(L + W + 1, H + 2 * W * 0.62 + 1) // flat-folded glued stack
+      : Math.max(2 * L + 2 * W + 1.2, H + 2 * majDFit + 0.5) + (isScope ? (W + 2) : 0);
   // Vertical extent of the standing box follows the open flaps: top flaps
   // shrink as they close, hanging bottom flaps are covered by depthBelow.
   const hasTopFit = !(style === '200' || isScope || bottomAnchored);
   const topOpenFit = hasTopFit ? Math.max(gMinD * (1 - gFMin), gMajD * (1 - gFM1)) : 0;
   const foldedExtent = bottomAnchored
-    ? Math.max(L, W, H + W * 0.8) + 1.2
+    ? (style === '501'
+      ? Math.max(L * 1.45, W, H) + 1 // tray pulled partway out of the sleeve
+      : Math.max(L, W, H + W * 0.8) + 1.2)
     : Math.max(L, W, H / 2 + topOpenFit + depthBelow) + (isScope ? 1.5 : 0);
-  const singleFit = flatExtent * 1.35 * (1 - fW) + foldedExtent * 2.4 * fW;
+  // The 0501 sleeve only reaches the tray late in the fold, so its camera
+  // blend follows the sleeve's travel instead of the wall stage.
+  const fitBlend = style === '501' ? stage(p, 0, 0.8) : fW;
+  const singleFit = flatExtent * 1.35 * (1 - fitBlend) + foldedExtent * 2.4 * fitBlend;
   const dualFit = flatExtent * 1.2 + foldedExtent * 0.8;
   const fitRadius = Math.max(7, viewMode === 'flat-box' ? dualFit : singleFit);
 
   // The slotted blank extends asymmetrically to +x (right+back+left panels
-  // chain to one side); re-centre it while flat so it orbits nicely.
-  const blankShiftX = bottomAnchored ? 0 : -(L / 2) * (1 - fW);
+  // chain to one side); re-centre it while flat so it orbits nicely. The
+  // collapsed crash-lock stack is offset the other way.
+  const blankShiftX = bottomAnchored ? 0 : (style === '711' ? (W / 2) : -(L / 2)) * (1 - fW);
 
   const [autoRotate, setAutoRotate] = React.useState(true);
   const controlsRef = useRef<any>(null);
@@ -836,11 +1010,16 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   };
   useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
 
-  const assembly = (foldP: number) => bottomAnchored
-    ? (style === '427'
-      ? <MailerBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} />
-      : <WrapBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} />)
-    : <SlottedBox L={L} W={W} H={H} style={style} p={foldP} tex={texForBox} printCoverageBack={coverBack} printCoverageSide={coverSide} withHandles={dieCutting && !isScope} gluing={gluing} stapling={stapling} />;
+  const assembly = (foldP: number) => {
+    if (style === '427') return <MailerBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} />;
+    // 0421 is the mailer's tray without a lid: its walls and corner tabs
+    // span the full slider range.
+    if (style === '421') return <MailerBox L={L} W={W} H={H} p={foldP * 0.6} tex={texForBox} printCoverageSide={coverSide} withLid={false} />;
+    if (style === '410') return <WrapBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} />;
+    if (style === '501') return <SleeveBox L={L} W={W} H={H} p={foldP} tex={texForBox} lidTex={lidTexSet} printCoverageSide={coverSide} />;
+    if (style === '711') return <CrashLockBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageBack={coverBack} printCoverageSide={coverSide} />;
+    return <SlottedBox L={L} W={W} H={H} style={style} p={foldP} tex={texForBox} lidTex={lidTexSet} printCoverageBack={coverBack} printCoverageSide={coverSide} withHandles={dieCutting && !isScope} gluing={gluing} stapling={stapling} />;
+  };
 
   // Flat blank presentation for the side-by-side view
   const flatBlank = bottomAnchored ? (
