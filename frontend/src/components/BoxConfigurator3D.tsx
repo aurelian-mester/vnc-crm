@@ -783,16 +783,39 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   const groupY = bottomAnchored ? -1.5 * T : slottedFlatY * (1 - fW);
   const groupTilt = bottomAnchored ? 0 : -HALF_PI * (1 - fW);
 
+  // The shadow floor follows the model's lowest point: open bottom flaps
+  // hang below the box and the tilting blank sweeps below its pivot, so a
+  // fixed floor would slice through them. Tracking the live lower bound
+  // keeps the shadow hugging the cardboard at every fold stage instead.
+  const gMinD = Math.min(W / 2, L / 2) - GAP;
+  const gOverlap = Math.min(W * 0.3, Math.max(0.3, W * 0.25));
+  const gMajD = style === '203' ? W - 2 * SLOT
+    : style === '202' ? Math.min((W + gOverlap) / 2, W - 0.1)
+    : W / 2 - GAP;
+  const gBotMax = Math.max(gMinD, gMajD);
+  const gOverlapping = style === '202' || style === '203';
+  const gFMin = stage(p, 0.5, 0.74);
+  const gFM1 = gOverlapping ? stage(p, 0.74, 0.87) : stage(p, 0.74, 1);
+  const gFM2 = gOverlapping ? stage(p, 0.87, 1) : gFM1;
+  const depthBelow = fW < 1
+    ? T / 2 + (H / 2 + gBotMax) * Math.cos(HALF_PI * (1 - fW)) + 2 * T * fW
+    : H / 2 + Math.max(gMinD * Math.cos(HALF_PI * gFMin), gMajD * Math.cos(HALF_PI * gFM1), gMajD * Math.cos(HALF_PI * gFM2)) + 2 * T;
+  const floorY = bottomAnchored ? groundY : Math.min(groundY, groupY - depthBelow - 0.004);
+
   // Camera fit: interpolates between the flat-blank footprint and the folded
   // box extent as the slider moves.
   const majDFit = style === '203' ? W : style === '202' ? W * 0.65 : W / 2;
   const flatExtent = bottomAnchored
     ? Math.max(L + 2 * H + 2, 2 * W + 3 * H + 1)
     : Math.max(2 * L + 2 * W + 1.2, H + 2 * majDFit + 0.5) + (isScope ? (W + 2) : 0);
+  // Vertical extent of the standing box follows the open flaps: top flaps
+  // shrink as they close, hanging bottom flaps are covered by depthBelow.
+  const hasTopFit = !(style === '200' || isScope || bottomAnchored);
+  const topOpenFit = hasTopFit ? Math.max(gMinD * (1 - gFMin), gMajD * (1 - gFM1)) : 0;
   const foldedExtent = bottomAnchored
     ? Math.max(L, W, H + W * 0.8) + 1.2
-    : Math.max(L, W, H + 2 * majDFit) + (isScope ? 1.5 : 0);
-  const singleFit = flatExtent * 1.35 * (1 - fW) + foldedExtent * 1.9 * fW;
+    : Math.max(L, W, H / 2 + topOpenFit + depthBelow) + (isScope ? 1.5 : 0);
+  const singleFit = flatExtent * 1.35 * (1 - fW) + foldedExtent * 2.4 * fW;
   const dualFit = flatExtent * 1.2 + foldedExtent * 0.8;
   const fitRadius = Math.max(7, viewMode === 'flat-box' ? dualFit : singleFit);
 
@@ -847,10 +870,11 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
         <Lightformer intensity={0.45} rotation-y={-HALF_PI} position={[8, 3, 0]} scale={[10, 4, 1]} />
       </Environment>
 
-      {/* studio floor */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, groundY - 0.004, 0]} receiveShadow>
+      {/* studio floor: shadow catcher only — it can never occlude geometry,
+          and it tracks the model's lowest point while flaps hang open */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, floorY, 0]} receiveShadow>
         <circleGeometry args={[Math.max(40, fitRadius * 2.4), 64]} />
-        <meshStandardMaterial color="#d6dce4" roughness={0.96} />
+        <shadowMaterial transparent opacity={0.22} />
       </mesh>
 
       <group>
