@@ -1,17 +1,28 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, Html } from '@react-three/drei';
+import { OrbitControls, Html, Environment, Lightformer } from '@react-three/drei';
 import * as THREE from 'three';
 
-// Keeps the camera distance fitted to the box's actual extent so large styles
-// (e.g. FEFCO 203 full-overlap flaps) aren't clipped, while small boxes still
-// fill the frame. Re-fits whenever the target radius changes; auto-rotate then
-// continues orbiting at the new radius.
+// All dimensions are in decimetres (1 unit = 100 mm), matching the page props.
+const T = 0.04;     // cardboard thickness (~4 mm)
+const SLOT = 0.045; // die-cut slot trimmed off each side of a flap (~4.5 mm)
+const GAP = 0.06;   // clearance where two flaps meet edge-to-edge (~6 mm)
+
+// Sub-stage interpolator: maps fold progress p through segment [a, b] to 0..1.
+const stage = (p: number, a: number, b: number) => Math.min(1, Math.max(0, (p - a) / (b - a)));
+const HALF_PI = Math.PI / 2;
+
+// ---------------------------------------------------------------------------
+// Camera: keeps the orbit radius fitted to the current extent of the model.
+// Only refits when the target radius changes (user zoom is preserved between
+// refits). The fold slider changes the radius continuously, so following it
+// here gives a smooth zoom-out toward the flat blank.
+// ---------------------------------------------------------------------------
 const CameraRig: React.FC<{ fitRadius: number; controlsRef: React.MutableRefObject<any> }> = ({ fitRadius, controlsRef }) => {
   const { camera } = useThree();
   useEffect(() => {
     const dir = camera.position.clone().normalize();
-    if (dir.lengthSq() === 0) dir.set(1, 0.85, 1).normalize();
+    if (dir.lengthSq() === 0) dir.set(1, 0.8, 1).normalize();
     camera.position.copy(dir.multiplyScalar(fitRadius));
     camera.updateProjectionMatrix();
     if (controlsRef.current) controlsRef.current.update();
@@ -19,7 +30,52 @@ const CameraRig: React.FC<{ fitRadius: number; controlsRef: React.MutableRefObje
   return null;
 };
 
-// Procedural Cardboard & Custom Canvas Texture Generator Hook
+// ---------------------------------------------------------------------------
+// Procedural textures. Everything is generated locally (intranet-safe).
+// The kraft base is seamless — panel edges are conveyed by real geometry and
+// die-cut slots, not by painted borders.
+// ---------------------------------------------------------------------------
+interface MaterialPalette { base: string; dark: string; fiber: string; lightFiber: string; stripe: string; }
+const palette = (material: string): MaterialPalette => {
+  if (material === 'Schrenz') return { base: '#a9a9a7', dark: '#8d8d8b', fiber: 'rgba(45,45,45,0.20)', lightFiber: 'rgba(235,235,235,0.25)', stripe: 'rgba(40,40,40,0.05)' };
+  if (material === 'Wellenstoff') return { base: '#c29a6e', dark: '#a37e54', fiber: 'rgba(70,44,22,0.22)', lightFiber: 'rgba(255,250,240,0.16)', stripe: 'rgba(64,40,18,0.06)' };
+  return { base: '#d3aa7c', dark: '#b78e5f', fiber: 'rgba(92,61,37,0.18)', lightFiber: 'rgba(255,252,245,0.15)', stripe: 'rgba(74,46,22,0.05)' }; // Testliner
+};
+
+const paintKraft = (ctx: CanvasRenderingContext2D, w: number, h: number, pal: MaterialPalette) => {
+  ctx.fillStyle = pal.base;
+  ctx.fillRect(0, 0, w, h);
+  // grain noise
+  for (let i = 0; i < (w * h) / 18; i++) {
+    const x = Math.random() * w, y = Math.random() * h;
+    const v = Math.random() * 0.09;
+    ctx.fillStyle = Math.random() > 0.5 ? `rgba(255,255,255,${v})` : `rgba(0,0,0,${v})`;
+    ctx.fillRect(x, y, 1.5, 1.5);
+  }
+  // dark fiber specks
+  ctx.fillStyle = pal.fiber;
+  for (let i = 0; i < (w * h) / 360; i++) {
+    ctx.fillRect(Math.random() * w, Math.random() * h, Math.random() * 5 + 2, Math.random() * 2.4 + 1.6);
+  }
+  // light recycled flecks
+  ctx.fillStyle = pal.lightFiber;
+  for (let i = 0; i < (w * h) / 700; i++) {
+    ctx.fillRect(Math.random() * w, Math.random() * h, Math.random() * 4 + 2, Math.random() * 2 + 1.5);
+  }
+  // very faint corrugation striping
+  ctx.fillStyle = pal.stripe;
+  for (let y = 0; y < h; y += 10) ctx.fillRect(0, y, w, 4);
+};
+
+interface TexSet {
+  plain: THREE.CanvasTexture | null;
+  printedFront: THREE.CanvasTexture | null;
+  printedSide: THREE.CanvasTexture | null;
+  bumpH: THREE.CanvasTexture | null;
+  bumpV: THREE.CanvasTexture | null;
+  alpha: THREE.CanvasTexture | null;
+}
+
 const useCardboardTextures = (
   material: string,
   hasHandle: boolean,
@@ -28,341 +84,190 @@ const useCardboardTextures = (
   hasRecycling: boolean,
   hasFragile: boolean,
   hasUpArrows: boolean,
-  logoImage: HTMLImageElement | null
-) => {
+  logoImage: HTMLImageElement | null,
+  frontAspect: number,
+  sideAspect: number
+): TexSet => {
   return useMemo(() => {
-    // 1. Generate Canvas for Plain Cardboard (High Resolution: 1024x1024)
+    const pal = palette(material);
+
+    // --- plain kraft -------------------------------------------------------
     const plainCanvas = document.createElement('canvas');
-    plainCanvas.width = 1024;
-    plainCanvas.height = 1024;
+    plainCanvas.width = 512; plainCanvas.height = 512;
     const pctx = plainCanvas.getContext('2d');
-    if (!pctx) return { plainTexture: null, printedTexture: null, alphaTexture: null, bumpTexture: null };
+    if (!pctx) return { plain: null, printedFront: null, printedSide: null, bumpH: null, bumpV: null, alpha: null };
+    paintKraft(pctx, 512, 512, pal);
+    const plain = new THREE.CanvasTexture(plainCanvas);
+    plain.colorSpace = THREE.SRGBColorSpace;
 
-    // Set up material grade aesthetics
-    let centerColor = '#dbb07d'; // Premium golden kraft brown
-    let edgeColor = '#bf9460';
-    let fiberColor = 'rgba(92, 61, 37, 0.18)';
-    let stripeColor = 'rgba(74, 46, 22, 0.06)';
-    let creaseColor = 'rgba(102, 71, 41, 0.48)';
-    let dashColor = 'rgba(102, 71, 41, 0.32)';
-
-    if (material === 'Schrenz') {
-      centerColor = '#a3a3a3'; // Recycled cool gray
-      edgeColor = '#808080';
-      fiberColor = 'rgba(40, 40, 40, 0.22)';
-      stripeColor = 'rgba(30, 30, 30, 0.08)';
-      creaseColor = 'rgba(50, 50, 50, 0.5)';
-      dashColor = 'rgba(50, 50, 50, 0.35)';
-    } else if (material === 'Wellenstoff') {
-      centerColor = '#c49f76'; // Coarse wave fluting brown
-      edgeColor = '#9e7a50';
-      fiberColor = 'rgba(64, 40, 20, 0.24)';
-      stripeColor = 'rgba(58, 36, 16, 0.09)';
-      creaseColor = 'rgba(74, 48, 25, 0.5)';
-      dashColor = 'rgba(74, 48, 25, 0.35)';
-    }
-
-    // Fill base cardboard color with a radial gradient for depth
-    const gradient = pctx.createRadialGradient(512, 512, 120, 512, 512, 720);
-    gradient.addColorStop(0, centerColor);
-    gradient.addColorStop(1, edgeColor);
-    pctx.fillStyle = gradient;
-    pctx.fillRect(0, 0, 1024, 1024);
-
-    // Draw realistic crease borders and fold markings
-    pctx.strokeStyle = creaseColor;
-    pctx.lineWidth = 16;
-    pctx.strokeRect(0, 0, 1024, 1024);
-
-    // Dashed inner crease lines
-    pctx.strokeStyle = dashColor;
-    pctx.lineWidth = 8;
-    pctx.setLineDash([24, 16]);
-    pctx.strokeRect(16, 16, 992, 992);
-    pctx.setLineDash([]);
-
-    // Subtle grain noise
-    for (let i = 0; i < 60000; i++) {
-      const x = Math.random() * 1024;
-      const y = Math.random() * 1024;
-      const val = Math.random() * 0.1;
-      pctx.fillStyle = Math.random() > 0.5 ? `rgba(255,255,255,${val})` : `rgba(0,0,0,${val})`;
-      pctx.fillRect(x, y, 1, 1);
-    }
-
-    // Cardboard fiber specks
-    pctx.fillStyle = fiberColor;
-    for (let i = 0; i < 3000; i++) {
-      const x = Math.random() * 1024;
-      const y = Math.random() * 1024;
-      const w = Math.random() * 6 + 2;
-      const h = Math.random() * 3 + 2;
-      pctx.fillRect(x, y, w, h);
-    }
-
-    // Secondary light fiber flecks for recycled look
-    const lightFiberColor = material === 'Schrenz' ? 'rgba(230, 230, 230, 0.25)' : 'rgba(255, 255, 255, 0.15)';
-    pctx.fillStyle = lightFiberColor;
-    for (let i = 0; i < 1500; i++) {
-      const x = Math.random() * 1024;
-      const y = Math.random() * 1024;
-      const w = Math.random() * 4 + 2;
-      const h = Math.random() * 2 + 2;
-      pctx.fillRect(x, y, w, h);
-    }
-
-    // Horizontal fiber lines (corrugation pattern look)
-    pctx.fillStyle = stripeColor;
-    for (let y = 0; y < 1024; y += 12) {
-      pctx.fillRect(0, y, 1024, 6.0);
-    }
-
-    const plainTex = new THREE.CanvasTexture(plainCanvas);
-    plainTex.colorSpace = THREE.SRGBColorSpace;
-    plainTex.needsUpdate = true;
-
-    // 2. Generate Canvas for Printed Cardboard
-    const printedCanvas = document.createElement('canvas');
-    printedCanvas.width = 1024;
-    printedCanvas.height = 1024;
-    const sctx = printedCanvas.getContext('2d');
-    if (!sctx) return { plainTexture: plainTex, printedTexture: null, alphaTexture: null, bumpTexture: null };
-
-    // Copy plain canvas background to preserve identical cardboard noise
-    sctx.drawImage(plainCanvas, 0, 0);
-
-    // Realistic print ink blending simulation using MULTIPLY composite mode
-    sctx.globalCompositeOperation = 'multiply';
-
+    // --- printed face (aspect-correct so text is not distorted) ------------
     const hexToRgba = (hex: string, alpha: number) => {
-      const r = parseInt(hex.slice(1, 3), 16);
-      const g = parseInt(hex.slice(3, 5), 16);
-      const b = parseInt(hex.slice(5, 7), 16);
+      const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
       return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     };
 
-    const inkColor = hexToRgba(printColor, 0.88);
+    const makePrinted = (aspect: number): THREE.CanvasTexture => {
+      const cw = 1024;
+      const ch = Math.round(Math.min(1536, Math.max(384, cw / Math.max(0.3, aspect))));
+      const c = document.createElement('canvas');
+      c.width = cw; c.height = ch;
+      const ctx = c.getContext('2d')!;
+      paintKraft(ctx, cw, ch, pal);
+      ctx.globalCompositeOperation = 'multiply';
 
-    // Draw stamp border
-    sctx.strokeStyle = hexToRgba(printColor, 0.65);
-    sctx.lineWidth = 12;
-    sctx.strokeRect(100, 220, 824, 584);
+      const u = Math.min(cw, ch); // scale unit
+      // stamp frame
+      const mx = cw * 0.09, my = ch * 0.14;
+      ctx.strokeStyle = hexToRgba(printColor, 0.65);
+      ctx.lineWidth = u * 0.012;
+      ctx.strokeRect(mx, my, cw - 2 * mx, ch - 2 * my);
+      ctx.strokeStyle = hexToRgba(printColor, 0.5);
+      ctx.lineWidth = u * 0.004;
+      ctx.strokeRect(mx + u * 0.02, my + u * 0.02, cw - 2 * mx - u * 0.04, ch - 2 * my - u * 0.04);
 
-    sctx.strokeStyle = hexToRgba(printColor, 0.55);
-    sctx.lineWidth = 4;
-    sctx.strokeRect(120, 240, 784, 544);
+      // brand text
+      ctx.fillStyle = hexToRgba(printColor, 0.92);
+      ctx.font = `bold ${Math.round(u * 0.13)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.fillText(printText || 'VRANCART', cw / 2, ch * 0.36);
+      ctx.fillStyle = hexToRgba(printColor, 0.72);
+      ctx.font = `bold ${Math.round(u * 0.045)}px monospace`;
+      ctx.fillText('DO NOT DOUBLE STACK', cw / 2, ch * 0.46);
+      ctx.fillText('FRAGILE - HANDLE WITH CARE', cw / 2, ch * 0.52);
 
-    // Draw main custom brand text
-    sctx.fillStyle = hexToRgba(printColor, 0.92);
-    sctx.font = 'bold 68px monospace';
-    sctx.textAlign = 'center';
-    sctx.fillText(printText || 'VRANCART', 512, 370);
-
-    // Sub-labels
-    sctx.fillStyle = hexToRgba(printColor, 0.75);
-    sctx.font = 'bold 24px monospace';
-    sctx.fillText('DO NOT DOUBLE STACK', 512, 450);
-    sctx.fillText('FRAGILE - HANDLE WITH CARE', 512, 490);
-
-    // Draw custom symbols centered at the bottom of the stamp
-    const drawUpArrows = (x: number, y: number) => {
-      sctx.strokeStyle = inkColor;
-      sctx.lineWidth = 6;
-      // Baseline
-      sctx.beginPath();
-      sctx.moveTo(x - 36, y + 30);
-      sctx.lineTo(x + 36, y + 30);
-      sctx.stroke();
-      // Arrow 1
-      sctx.beginPath();
-      sctx.moveTo(x - 18, y + 20);
-      sctx.lineTo(x - 18, y - 30);
-      sctx.stroke();
-      sctx.beginPath();
-      sctx.moveTo(x - 28, y - 10);
-      sctx.lineTo(x - 18, y - 30);
-      sctx.lineTo(x - 8, y - 10);
-      sctx.stroke();
-      // Arrow 2
-      sctx.beginPath();
-      sctx.moveTo(x + 18, y + 20);
-      sctx.lineTo(x + 18, y - 30);
-      sctx.stroke();
-      sctx.beginPath();
-      sctx.moveTo(x + 8, y - 10);
-      sctx.lineTo(x + 18, y - 30);
-      sctx.lineTo(x + 28, y - 10);
-      sctx.stroke();
-    };
-
-    const drawFragile = (x: number, y: number) => {
-      sctx.strokeStyle = inkColor;
-      sctx.lineWidth = 6;
-      sctx.beginPath();
-      sctx.moveTo(x - 26, y - 30);
-      sctx.lineTo(x + 26, y - 30);
-      sctx.stroke();
-      sctx.beginPath();
-      sctx.arc(x, y - 30, 26, 0, Math.PI);
-      sctx.stroke();
-      sctx.beginPath();
-      sctx.moveTo(x, y);
-      sctx.lineTo(x, y + 24);
-      sctx.stroke();
-      sctx.beginPath();
-      sctx.moveTo(x - 20, y + 24);
-      sctx.lineTo(x + 20, y + 24);
-      sctx.stroke();
-      // Crack
-      sctx.strokeStyle = inkColor;
-      sctx.lineWidth = 3;
-      sctx.beginPath();
-      sctx.moveTo(x - 8, y - 30);
-      sctx.lineTo(x - 2, y - 10);
-      sctx.lineTo(x - 14, y + 4);
-      sctx.stroke();
-    };
-
-    const drawRecycling = (x: number, y: number) => {
-      sctx.strokeStyle = inkColor;
-      sctx.lineWidth = 6;
-      const r = 30;
-      for (let angle = 0; angle < 2 * Math.PI; angle += (2 * Math.PI) / 3) {
-        sctx.beginPath();
-        sctx.arc(x, y, r, angle + 0.2, angle + (2 * Math.PI) / 3 - 0.45);
-        sctx.stroke();
-
-        const endAngle = angle + (2 * Math.PI) / 3 - 0.45;
-        const ax = x + r * Math.cos(endAngle);
-        const ay = y + r * Math.sin(endAngle);
-        const psi = endAngle + Math.PI / 2;
-
-        sctx.fillStyle = inkColor;
-        sctx.beginPath();
-        sctx.moveTo(ax, ay);
-        const arrowLength = 14;
-        const arrowHalfAngle = 0.5;
-        const x1 = ax - arrowLength * Math.cos(psi - arrowHalfAngle);
-        const y1 = ay - arrowLength * Math.sin(psi - arrowHalfAngle);
-        sctx.lineTo(x1, y1);
-        const x2 = ax - arrowLength * Math.cos(psi + arrowHalfAngle);
-        const y2 = ay - arrowLength * Math.sin(psi + arrowHalfAngle);
-        sctx.lineTo(x2, y2);
-        sctx.closePath();
-        sctx.fill();
-      }
-      sctx.fillStyle = inkColor;
-      sctx.font = 'bold 16px monospace';
-      sctx.textAlign = 'center';
-      sctx.fillText('20', x, y + 5);
-      sctx.font = 'bold 12px monospace';
-      sctx.fillText('PAP', x, y + 18);
-    };
-
-    const activeSymbols = [];
-    if (hasRecycling) activeSymbols.push('recycling');
-    if (hasFragile) activeSymbols.push('fragile');
-    if (hasUpArrows) activeSymbols.push('upArrows');
-
-    const symbolY = 640;
-    if (activeSymbols.length === 1) {
-      if (activeSymbols[0] === 'recycling') drawRecycling(512, symbolY);
-      if (activeSymbols[0] === 'fragile') drawFragile(512, symbolY);
-      if (activeSymbols[0] === 'upArrows') drawUpArrows(512, symbolY);
-    } else if (activeSymbols.length === 2) {
-      activeSymbols.forEach((sym, idx) => {
-        const sx = idx === 0 ? 400 : 624;
-        if (sym === 'recycling') drawRecycling(sx, symbolY);
-        if (sym === 'fragile') drawFragile(sx, symbolY);
-        if (sym === 'upArrows') drawUpArrows(sx, symbolY);
-      });
-    } else if (activeSymbols.length === 3) {
-      drawRecycling(320, symbolY);
-      drawFragile(512, symbolY);
-      drawUpArrows(704, symbolY);
-    }
-
-    // Logo image rendering with monochromatization
-    if (logoImage) {
-      const aspect = logoImage.width / logoImage.height;
-      let drawW = 240;
-      let drawH = 240 / aspect;
-      if (drawH > 200) {
-        drawH = 200;
-        drawW = 200 * aspect;
-      }
-      const drawX = 512 - drawW / 2;
-      const drawY = 600 - drawH / 2; // Position centered within the bottom half
-
-      try {
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = logoImage.width;
-        tempCanvas.height = logoImage.height;
-        const tctx = tempCanvas.getContext('2d');
-        if (tctx) {
-          tctx.drawImage(logoImage, 0, 0);
-          const imgData = tctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
-          const data = imgData.data;
-
-          const rInk = parseInt(printColor.slice(1, 3), 16);
-          const gInk = parseInt(printColor.slice(3, 5), 16);
-          const bInk = parseInt(printColor.slice(5, 7), 16);
-
-          for (let i = 0; i < data.length; i += 4) {
-            const r = data[i];
-            const g = data[i+1];
-            const b = data[i+2];
-            const alpha = data[i+3];
-
-            // Grayscale filter
-            const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-            const inkDensity = (255 - gray) / 255;
-
-            data[i] = rInk;
-            data[i+1] = gInk;
-            data[i+2] = bInk;
-            data[i+3] = alpha * inkDensity * 0.90;
-          }
-          tctx.putImageData(imgData, 0, 0);
-          sctx.drawImage(tempCanvas, drawX, drawY, drawW, drawH);
+      // handling symbols
+      const ink = hexToRgba(printColor, 0.88);
+      const s = u * 0.0011; // symbol scale relative to the original 1024px art
+      const drawUpArrows = (x: number, y: number) => {
+        ctx.strokeStyle = ink; ctx.lineWidth = 6 * s * 1000 / 1024 * u / u; ctx.lineWidth = u * 0.006;
+        ctx.beginPath(); ctx.moveTo(x - 36 * s * 1000, y + 30 * s * 1000); ctx.lineTo(x + 36 * s * 1000, y + 30 * s * 1000); ctx.stroke();
+        for (const dx of [-18, 18]) {
+          ctx.beginPath(); ctx.moveTo(x + dx * s * 1000, y + 20 * s * 1000); ctx.lineTo(x + dx * s * 1000, y - 30 * s * 1000); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(x + (dx - 10) * s * 1000, y - 10 * s * 1000); ctx.lineTo(x + dx * s * 1000, y - 30 * s * 1000); ctx.lineTo(x + (dx + 10) * s * 1000, y - 10 * s * 1000); ctx.stroke();
         }
-      } catch (err) {
-        console.error('Error rendering monochrome logo:', err);
+      };
+      const drawFragile = (x: number, y: number) => {
+        ctx.strokeStyle = ink; ctx.lineWidth = u * 0.006;
+        const k = s * 1000;
+        ctx.beginPath(); ctx.moveTo(x - 26 * k, y - 30 * k); ctx.lineTo(x + 26 * k, y - 30 * k); ctx.stroke();
+        ctx.beginPath(); ctx.arc(x, y - 30 * k, 26 * k, 0, Math.PI); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + 24 * k); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x - 20 * k, y + 24 * k); ctx.lineTo(x + 20 * k, y + 24 * k); ctx.stroke();
+        ctx.lineWidth = u * 0.003;
+        ctx.beginPath(); ctx.moveTo(x - 8 * k, y - 30 * k); ctx.lineTo(x - 2 * k, y - 10 * k); ctx.lineTo(x - 14 * k, y + 4 * k); ctx.stroke();
+      };
+      const drawRecycling = (x: number, y: number) => {
+        ctx.strokeStyle = ink; ctx.lineWidth = u * 0.006;
+        const r = 30 * s * 1000;
+        for (let angle = 0; angle < 2 * Math.PI; angle += (2 * Math.PI) / 3) {
+          ctx.beginPath();
+          ctx.arc(x, y, r, angle + 0.2, angle + (2 * Math.PI) / 3 - 0.45);
+          ctx.stroke();
+          const endAngle = angle + (2 * Math.PI) / 3 - 0.45;
+          const ax = x + r * Math.cos(endAngle), ay = y + r * Math.sin(endAngle);
+          const psi = endAngle + Math.PI / 2;
+          ctx.fillStyle = ink;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          const al = 14 * s * 1000, ha = 0.5;
+          ctx.lineTo(ax - al * Math.cos(psi - ha), ay - al * Math.sin(psi - ha));
+          ctx.lineTo(ax - al * Math.cos(psi + ha), ay - al * Math.sin(psi + ha));
+          ctx.closePath(); ctx.fill();
+        }
+        ctx.fillStyle = ink;
+        ctx.font = `bold ${Math.round(u * 0.03)}px monospace`;
+        ctx.textAlign = 'center';
+        ctx.fillText('20', x, y + u * 0.01);
+        ctx.font = `bold ${Math.round(u * 0.022)}px monospace`;
+        ctx.fillText('PAP', x, y + u * 0.034);
+      };
+
+      const active: string[] = [];
+      if (hasRecycling) active.push('recycling');
+      if (hasFragile) active.push('fragile');
+      if (hasUpArrows) active.push('upArrows');
+      const sy = ch * 0.68;
+      const xs = active.length === 1 ? [cw / 2] : active.length === 2 ? [cw * 0.38, cw * 0.62] : [cw * 0.3, cw * 0.5, cw * 0.7];
+      active.forEach((sym, i) => {
+        if (sym === 'recycling') drawRecycling(xs[i], sy);
+        if (sym === 'fragile') drawFragile(xs[i], sy);
+        if (sym === 'upArrows') drawUpArrows(xs[i], sy);
+      });
+
+      // monochromatized logo
+      if (logoImage) {
+        const la = logoImage.width / logoImage.height;
+        let dw = u * 0.24, dh = dw / la;
+        if (dh > u * 0.2) { dh = u * 0.2; dw = dh * la; }
+        try {
+          const tc = document.createElement('canvas');
+          tc.width = logoImage.width; tc.height = logoImage.height;
+          const tctx = tc.getContext('2d');
+          if (tctx) {
+            tctx.drawImage(logoImage, 0, 0);
+            const imgData = tctx.getImageData(0, 0, tc.width, tc.height);
+            const data = imgData.data;
+            const rI = parseInt(printColor.slice(1, 3), 16), gI = parseInt(printColor.slice(3, 5), 16), bI = parseInt(printColor.slice(5, 7), 16);
+            for (let i = 0; i < data.length; i += 4) {
+              const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+              const dens = (255 - gray) / 255;
+              data[i] = rI; data[i + 1] = gI; data[i + 2] = bI;
+              data[i + 3] = data[i + 3] * dens * 0.9;
+            }
+            tctx.putImageData(imgData, 0, 0);
+            ctx.drawImage(tc, cw / 2 - dw / 2, ch * 0.6 - dh / 2, dw, dh);
+          }
+        } catch (err) {
+          console.error('Error rendering monochrome logo:', err);
+        }
       }
+
+      // flexo ink-skipping
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = pal.dark;
+      for (let i = 0; i < 9000; i++) {
+        ctx.fillRect(mx + Math.random() * (cw - 2 * mx), my + Math.random() * (ch - 2 * my), Math.random() * 2 + 0.5, Math.random() * 2 + 0.5);
+      }
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    };
+
+    const printedFront = makePrinted(frontAspect);
+    const printedSide = makePrinted(sideAspect);
+
+    // --- corrugation bump maps (H = flutes run horizontally in UV) ---------
+    const bumpCanvas = document.createElement('canvas');
+    bumpCanvas.width = 256; bumpCanvas.height = 256;
+    const bctx = bumpCanvas.getContext('2d')!;
+    bctx.fillStyle = '#808080';
+    bctx.fillRect(0, 0, 256, 256);
+    for (let y = 0; y < 256; y++) {
+      const ripple = Math.sin((y / 6) * Math.PI * 2) * 7;
+      const v = Math.round(128 + ripple);
+      bctx.fillStyle = `rgb(${v},${v},${v})`;
+      bctx.fillRect(0, y, 256, 1);
     }
-
-    // Apply flexographic print ink-skipping / fiber knockout effect
-    sctx.globalCompositeOperation = 'source-over';
-    sctx.fillStyle = edgeColor;
-    for (let i = 0; i < 18000; i++) {
-      const x = 100 + Math.random() * 824;
-      const y = 220 + Math.random() * 584;
-      const size = Math.random() * 2 + 0.5;
-      sctx.fillRect(x, y, size, size);
+    for (let i = 0; i < 6000; i++) {
+      const off = Math.random() * 14 - 7;
+      bctx.fillStyle = off > 0 ? `rgba(255,255,255,${off / 255})` : `rgba(0,0,0,${-off / 255})`;
+      bctx.fillRect(Math.random() * 256, Math.random() * 256, 1, 1);
     }
+    const bumpH = new THREE.CanvasTexture(bumpCanvas);
+    const bumpV = new THREE.CanvasTexture(bumpCanvas);
+    bumpV.center.set(0.5, 0.5);
+    bumpV.rotation = HALF_PI;
 
-    const printedTex = new THREE.CanvasTexture(printedCanvas);
-    printedTex.colorSpace = THREE.SRGBColorSpace;
-    printedTex.needsUpdate = true;
-
-    // 3. Alpha Map Canvas for Handle Holes
+    // --- alpha map for die-cut handle holes --------------------------------
     const alphaCanvas = document.createElement('canvas');
-    alphaCanvas.width = 256;
-    alphaCanvas.height = 256;
-    const actx = alphaCanvas.getContext('2d');
-    if (!actx) return { plainTexture: plainTex, printedTexture: printedTex, alphaTexture: null, bumpTexture: null };
-
+    alphaCanvas.width = 256; alphaCanvas.height = 256;
+    const actx = alphaCanvas.getContext('2d')!;
     actx.fillStyle = '#ffffff';
     actx.fillRect(0, 0, 256, 256);
-
     if (hasHandle) {
       actx.fillStyle = '#000000';
-      const hx = 68;
-      const hy = 113;
-      const hw = 120;
-      const hh = 30;
-      const r = 15;
-
+      const hx = 68, hy = 100, hw = 120, hh = 30, r = 15;
       actx.beginPath();
       actx.moveTo(hx + r, hy);
       actx.lineTo(hx + hw - r, hy);
@@ -376,103 +281,377 @@ const useCardboardTextures = (
       actx.closePath();
       actx.fill();
     }
+    const alpha = new THREE.CanvasTexture(alphaCanvas);
 
-    const alphaTex = new THREE.CanvasTexture(alphaCanvas);
-    alphaTex.needsUpdate = true;
-
-    // 4. Generate Canvas for Bump Map (Detailed Cardboard Structure)
-    const bumpCanvas = document.createElement('canvas');
-    bumpCanvas.width = 1024;
-    bumpCanvas.height = 1024;
-    const bctx = bumpCanvas.getContext('2d');
-    if (!bctx) return { plainTexture: plainTex, printedTexture: printedTex, alphaTexture: alphaTex, bumpTexture: null };
-
-    // Fill base height (neutral gray - 128)
-    bctx.fillStyle = '#808080';
-    bctx.fillRect(0, 0, 1024, 1024);
-
-    // Corrugation flutes ripples (height sine wave)
-    for (let y = 0; y < 1024; y++) {
-      const ripple = Math.sin((y / 12) * Math.PI * 2) * 8; // Wave frequency of 12px
-      const grayVal = Math.round(128 + ripple);
-      bctx.fillStyle = `rgb(${grayVal}, ${grayVal}, ${grayVal})`;
-      bctx.fillRect(0, y, 1024, 1);
-    }
-
-    // Crease lines (deep pressed-down indentations)
-    bctx.strokeStyle = '#404040';
-    bctx.lineWidth = 16;
-    bctx.strokeRect(0, 0, 1024, 1024);
-
-    // Dashed inner crease lines
-    bctx.strokeStyle = '#585858';
-    bctx.lineWidth = 8;
-    bctx.setLineDash([24, 16]);
-    bctx.strokeRect(16, 16, 992, 992);
-    bctx.setLineDash([]);
-
-    // Paper grain micro height variations
-    for (let i = 0; i < 40000; i++) {
-      const x = Math.random() * 1024;
-      const y = Math.random() * 1024;
-      const offset = Math.round(Math.random() * 16 - 8); // +/- 8 depth variation
-      bctx.fillStyle = offset > 0 ? `rgba(255, 255, 255, ${offset / 255})` : `rgba(0, 0, 0, ${Math.abs(offset) / 255})`;
-      bctx.fillRect(x, y, 1, 1);
-    }
-
-    const bumpTex = new THREE.CanvasTexture(bumpCanvas);
-    bumpTex.needsUpdate = true;
-
-    return { plainTexture: plainTex, printedTexture: printedTex, alphaTexture: alphaTex, bumpTexture: bumpTex };
-  }, [material, hasHandle, printColor, printText, hasRecycling, hasFragile, hasUpArrows, logoImage]);
+    return { plain, printedFront, printedSide, bumpH, bumpV, alpha };
+  }, [material, hasHandle, printColor, printText, hasRecycling, hasFragile, hasUpArrows, logoImage, frontAspect, sideAspect]);
 };
 
-// Panel component holding geometry, textures, bump maps, and flaps
+// ---------------------------------------------------------------------------
+// One cardboard panel. Flutes: 'v' runs the corrugation vertically (walls),
+// 'h' runs it horizontally (flaps, lids, bottoms).
+// ---------------------------------------------------------------------------
 interface PanelProps {
-  width: number;
-  height: number;
-  thickness: number;
-  colorTexture: THREE.CanvasTexture | null;
-  alphaTexture: THREE.CanvasTexture | null;
-  bumpTexture: THREE.CanvasTexture | null;
-  isGlueTab?: boolean;
+  w: number;
+  h: number;
+  tex: TexSet;
+  face?: 'plain' | 'front' | 'side';
+  flute?: 'v' | 'h';
+  withAlpha?: boolean;
+  glue?: boolean;
 }
 
-const CardboardPanel: React.FC<PanelProps> = ({
-  width,
-  height,
-  thickness,
-  colorTexture,
-  alphaTexture,
-  bumpTexture,
-  isGlueTab = false,
-}) => {
+const Panel: React.FC<PanelProps> = ({ w, h, tex, face = 'plain', flute = 'v', withAlpha = false, glue = false }) => {
+  const map = face === 'front' ? tex.printedFront : face === 'side' ? tex.printedSide : tex.plain;
+  const bump = flute === 'v' ? tex.bumpV : tex.bumpH;
   return (
     <mesh castShadow receiveShadow>
-      <boxGeometry args={[width, height, thickness]} />
+      <boxGeometry args={[w, h, T]} />
       <meshStandardMaterial
-        color={isGlueTab ? '#9c7346' : '#ffffff'}
-        map={colorTexture || undefined}
-        alphaMap={alphaTexture || undefined}
-        transparent={!!alphaTexture && !isGlueTab}
-        roughness={0.95} // Cardboard is very matte/rough
-        metalness={0.0}
+        color={glue ? '#a8825a' : '#ffffff'}
+        map={map || undefined}
+        alphaMap={withAlpha ? (tex.alpha || undefined) : undefined}
+        alphaTest={withAlpha ? 0.5 : 0}
+        roughness={0.88}
+        metalness={0.02}
         side={THREE.DoubleSide}
-        bumpMap={isGlueTab ? undefined : (bumpTexture || undefined)}
-        bumpScale={0.006} // Subtle tactile surface bumps
+        bumpMap={glue ? undefined : (bump || undefined)}
+        bumpScale={0.012}
       />
     </mesh>
   );
 };
 
-// Horizontal/Vertical Dimension Line
-const DimensionOverlay = ({
-  start,
-  end,
-  label,
-  offset,
-  dir
-}: {
+// Small metallic staple
+const BoxStaple = ({ position }: { position: [number, number, number] }) => (
+  <mesh position={position}>
+    <boxGeometry args={[0.04, 0.015, 0.015]} />
+    <meshStandardMaterial color="#b0bec5" roughness={0.3} metalness={0.8} />
+  </mesh>
+);
+
+// ---------------------------------------------------------------------------
+// A flap hinged on the top or bottom edge of a wall panel.
+// `lift` raises the hinge line as the flap folds so an outer (major) flap
+// rests one board thickness above the minor flaps it covers — this is what
+// prevents the panels from intersecting when the box closes.
+// ---------------------------------------------------------------------------
+interface FlapProps {
+  wallH: number;
+  width: number;
+  depth: number;
+  fold: number;       // 0 open (coplanar with wall) .. 1 closed (horizontal)
+  edge: 'top' | 'bottom';
+  liftLayers: number; // 0 = innermost layer, 1 = one thickness above, 2 = two
+  tex: TexSet;
+}
+
+const Flap: React.FC<FlapProps> = ({ wallH, width, depth, fold, edge, liftLayers, tex }) => {
+  if (depth <= 0.01) return null;
+  const sign = edge === 'top' ? 1 : -1;
+  const hingeY = sign * (wallH / 2 + liftLayers * T * fold);
+  const angle = sign * -HALF_PI * fold; // fold inward over the opening
+  return (
+    <group position={[0, hingeY, 0]} rotation={[angle, 0, 0]}>
+      <group position={[0, sign * depth / 2, 0]}>
+        <Panel w={width} h={depth} tex={tex} face="plain" flute="h" />
+      </group>
+    </group>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Slotted styles (FEFCO 0200/0201/0202/0203) + telescopic trays (0300/0301).
+// Wall chain: FRONT anchors the assembly; RIGHT and BACK wrap to the right,
+// LEFT and the glue tab wrap to the left — identical topology to a real
+// blank, so foldWalls=0 lays out the true die-cut pattern.
+// ---------------------------------------------------------------------------
+interface SlottedProps {
+  L: number; W: number; H: number;
+  style: string; // '200' | '201' | '202' | '203' | '300' | '301'
+  p: number;
+  tex: TexSet;
+  printCoverageBack: boolean;
+  printCoverageSide: boolean;
+  withHandles: boolean;
+  gluing: boolean;
+  stapling: boolean;
+}
+
+const SlottedBox: React.FC<SlottedProps> = ({ L, W, H, style, p, tex, printCoverageBack, printCoverageSide, withHandles, gluing, stapling }) => {
+  const fW = stage(p, 0, 0.5);
+  const fMin = stage(p, 0.5, 0.74);
+  const overlapping = style === '202' || style === '203';
+  // Overlapping styles close one major flap at a time (the second lands on
+  // top of the first); meeting flaps close together.
+  const fMaj1 = overlapping ? stage(p, 0.74, 0.87) : stage(p, 0.74, 1);
+  const fMaj2 = overlapping ? stage(p, 0.87, 1) : fMaj1;
+
+  const minD = Math.min(W / 2, L / 2) - GAP;
+  const overlap = Math.min(W * 0.3, Math.max(0.3, W * 0.25));
+  const majD = style === '203' ? W - 2 * SLOT
+    : style === '202' ? Math.min((W + overlap) / 2, W - 0.1)
+    : W / 2 - GAP;
+  const hasTop = style === '201' || style === '202' || style === '203';
+
+  const wallAngle = -HALF_PI * fW;
+
+  const majorW = L - 2 * SLOT;
+  const minorW = W - 2 * SLOT;
+
+  // FEFCO 300/301 telescopic lid
+  const isScope = style === '300' || style === '301';
+  const rimH = style === '301' ? H * 0.96 : Math.max(0.4, H * 0.24);
+  const clear = 0.07;
+  const lidL = L + 2 * clear + 2 * T;
+  const lidW = W + 2 * clear + 2 * T;
+  const fRim = stage(p, 0.5, 0.75);
+  const fDrop = stage(p, 0.75, 1);
+  // Lid travel: lies in the blank plane beyond the top flaps while flat,
+  // hovers above the tray folding its rims, then descends onto it. The lid
+  // counter-rotates against the assembly tilt so it stays world-horizontal.
+  const fWalls = stage(p, 0, 0.5);
+  const lidBlankY = H / 2 + majD + lidW / 2 + 0.5;
+  const lidHoverY = H / 2 + rimH + 1.0;
+  const lidSeatY = H / 2 + T / 2 + 0.012;
+  const lidY = lidBlankY + (lidHoverY - lidBlankY) * fWalls - (lidHoverY - lidSeatY) * fDrop;
+  const lidCounterTilt = HALF_PI * (1 - fWalls);
+  const lidRimAngle = HALF_PI * (1 - fRim); // 0 = rims hanging down (closed)
+
+  return (
+    <group>
+      {/* FRONT (anchor) */}
+      <group position={[0, 0, (W / 2) * fW]}>
+        <Panel w={L} h={H} tex={tex} face="front" flute="v" />
+        {hasTop && <Flap wallH={H} width={majorW} depth={majD} fold={fMaj1} edge="top" liftLayers={1} tex={tex} />}
+        <Flap wallH={H} width={majorW} depth={majD} fold={fMaj1} edge="bottom" liftLayers={1} tex={tex} />
+
+        {/* RIGHT (hinged to front's right edge) */}
+        <group position={[L / 2, 0, 0]} rotation={[0, -wallAngle, 0]}>
+          <group position={[W / 2, 0, 0]}>
+            <Panel w={W} h={H} tex={tex} face={printCoverageSide ? 'side' : 'plain'} flute="v" withAlpha={withHandles} />
+            {hasTop && <Flap wallH={H} width={minorW} depth={minD} fold={fMin} edge="top" liftLayers={0} tex={tex} />}
+            <Flap wallH={H} width={minorW} depth={minD} fold={fMin} edge="bottom" liftLayers={0} tex={tex} />
+          </group>
+
+          {/* BACK (hinged to right's far edge) */}
+          <group position={[W, 0, 0]} rotation={[0, -wallAngle, 0]}>
+            <group position={[L / 2, 0, 0]}>
+              <Panel w={L} h={H} tex={tex} face={printCoverageBack ? 'front' : 'plain'} flute="v" />
+              {hasTop && <Flap wallH={H} width={majorW} depth={majD} fold={fMaj2} edge="top" liftLayers={overlapping ? 2 : 1} tex={tex} />}
+              <Flap wallH={H} width={majorW} depth={majD} fold={fMaj2} edge="bottom" liftLayers={overlapping ? 2 : 1} tex={tex} />
+            </group>
+          </group>
+        </group>
+
+        {/* LEFT (hinged to front's left edge) */}
+        <group position={[-L / 2, 0, 0]} rotation={[0, wallAngle, 0]}>
+          <group position={[-W / 2, 0, 0]}>
+            <Panel w={W} h={H} tex={tex} face={printCoverageSide ? 'side' : 'plain'} flute="v" withAlpha={withHandles} />
+            {hasTop && <Flap wallH={H} width={minorW} depth={minD} fold={fMin} edge="top" liftLayers={0} tex={tex} />}
+            <Flap wallH={H} width={minorW} depth={minD} fold={fMin} edge="bottom" liftLayers={0} tex={tex} />
+
+            {/* glue tab wraps onto the back wall */}
+            <group position={[-W / 2, 0, 0]} rotation={[0, -wallAngle, 0]}>
+              <group position={[0.15, 0, 0]}>
+                <Panel w={0.3} h={H - 0.1} tex={tex} glue />
+                {gluing && (
+                  <group position={[0, 0, T / 2 + 0.004]}>
+                    {[0.2, 0, -0.2].map(f => (
+                      <mesh key={f} position={[0, H * f, 0]}>
+                        <cylinderGeometry args={[0.012, 0.012, H * 0.18, 8]} />
+                        <meshStandardMaterial color="#e5c158" roughness={0.15} transparent opacity={0.75} />
+                      </mesh>
+                    ))}
+                  </group>
+                )}
+              </group>
+            </group>
+            {stapling && (
+              <group position={[-W / 2, 0, 0]}>
+                {[0.3, 0.1, -0.1, -0.3].map(f => <BoxStaple key={f} position={[-0.04, H * f, T]} />)}
+              </group>
+            )}
+          </group>
+        </group>
+      </group>
+
+      {/* Telescopic lid for 0300/0301 */}
+      {isScope && (
+        <group position={[0, lidY, 0]} rotation={[lidCounterTilt, 0, 0]}>
+          <group rotation={[HALF_PI, 0, 0]}>
+            <Panel w={lidL} h={lidW} tex={tex} face="plain" flute="h" />
+          </group>
+          {/* four rims: hang down when closed (angle 0), splay flat when open */}
+          <group position={[0, 0, lidW / 2]} rotation={[-lidRimAngle, 0, 0]}>
+            <group position={[0, -rimH / 2, 0]}>
+              <Panel w={lidL} h={rimH} tex={tex} face="plain" flute="h" />
+            </group>
+          </group>
+          <group position={[0, 0, -lidW / 2]} rotation={[lidRimAngle, 0, 0]}>
+            <group position={[0, -rimH / 2, 0]}>
+              <Panel w={lidL} h={rimH} tex={tex} face="plain" flute="h" />
+            </group>
+          </group>
+          <group position={[lidL / 2, 0, 0]} rotation={[0, 0, lidRimAngle]}>
+            <group position={[0, -rimH / 2, 0]} rotation={[0, HALF_PI, 0]}>
+              <Panel w={lidW - 2 * SLOT} h={rimH} tex={tex} face="plain" flute="h" />
+            </group>
+          </group>
+          <group position={[-lidL / 2, 0, 0]} rotation={[0, 0, -lidRimAngle]}>
+            <group position={[0, -rimH / 2, 0]} rotation={[0, HALF_PI, 0]}>
+              <Panel w={lidW - 2 * SLOT} h={rimH} tex={tex} face="plain" flute="h" />
+            </group>
+          </group>
+        </group>
+      )}
+    </group>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// FEFCO 0427 die-cut mailer (simplified, recognizable shape).
+// Bottom-anchored: the blank already lies flat at fold 0.
+// Box is centred: bottom panel at y=-H/2, walls rise to +H/2.
+// ---------------------------------------------------------------------------
+interface OnePieceProps {
+  L: number; W: number; H: number;
+  p: number;
+  tex: TexSet;
+  printCoverageSide: boolean;
+}
+
+const MailerBox: React.FC<OnePieceProps> = ({ L, W, H, p, tex, printCoverageSide }) => {
+  const fSide = stage(p, 0, 0.28);
+  const fTab = stage(p, 0.28, 0.44);
+  const fFB = stage(p, 0.44, 0.6);
+  const fLid = stage(p, 0.6, 0.95);
+  const fTuck = stage(p, 0.72, 0.9);
+
+  const tabD = Math.min(W * 0.28, L * 0.25);
+  const lidDepth = W - T - 0.04;
+  const lidWidth = L + 2 * T + 0.04;
+  const skirtD = H * 0.8;
+  const tuckD = Math.min(H * 0.7, W * 0.45);
+
+  const baseY = -H / 2 + T / 2;
+
+  return (
+    <group position={[0, baseY, 0]}>
+      {/* bottom */}
+      <group rotation={[HALF_PI, 0, 0]}>
+        <Panel w={L} h={W} tex={tex} face="plain" flute="h" />
+      </group>
+
+      {/* side walls with dust tabs */}
+      {[1, -1].map(s => (
+        <group key={'sw' + s} position={[s * L / 2, 0, 0]} rotation={[0, 0, s * -HALF_PI * (1 - fSide)]}>
+          <group position={[0, H / 2, 0]}>
+            <group rotation={[0, HALF_PI, 0]}>
+              <Panel w={W - 2 * SLOT} h={H} tex={tex} face={printCoverageSide ? 'side' : 'plain'} flute="v" />
+            </group>
+            {/* dust tabs fold inward against the future front/back walls */}
+            {[1, -1].map(zs => (
+              <group key={'tab' + zs} position={[0, 0, zs * (W / 2 - T - 0.012)]} rotation={[0, zs * s * -HALF_PI * fTab, 0]}>
+                <group position={[0, 0, zs * tabD / 2]} rotation={[0, HALF_PI, 0]}>
+                  <Panel w={tabD} h={H - 2 * SLOT} tex={tex} face="plain" flute="h" />
+                </group>
+              </group>
+            ))}
+          </group>
+        </group>
+      ))}
+
+      {/* front wall */}
+      <group position={[0, 0, W / 2]} rotation={[HALF_PI * (1 - fFB), 0, 0]}>
+        <group position={[0, H / 2, 0]}>
+          <Panel w={L} h={H} tex={tex} face="front" flute="v" />
+        </group>
+      </group>
+
+      {/* back wall + lid + skirts + tuck */}
+      <group position={[0, 0, -W / 2]} rotation={[-HALF_PI * (1 - fFB), 0, 0]}>
+        <group position={[0, H / 2, 0]}>
+          <Panel w={L} h={H} tex={tex} face="plain" flute="v" />
+          {/* lid hinged on the back wall's top edge */}
+          <group position={[0, H / 2 + 0.012 * fLid, 0]} rotation={[HALF_PI * fLid, 0, 0]}>
+            <group position={[0, lidDepth / 2, 0]}>
+              <Panel w={lidWidth} h={lidDepth} tex={tex} face="plain" flute="h" />
+              {/* side skirts fold down outside the side walls */}
+              {[1, -1].map(s => (
+                <group key={'sk' + s} position={[s * lidWidth / 2, 0, 0]} rotation={[0, -s * HALF_PI * fTuck, 0]}>
+                  <group position={[s * skirtD / 2, 0, 0]}>
+                    <Panel w={skirtD} h={lidDepth - 0.15} tex={tex} face="plain" flute="h" />
+                  </group>
+                </group>
+              ))}
+              {/* front tuck flap slides inside the front wall */}
+              <group position={[0, lidDepth / 2, 0]} rotation={[HALF_PI * fTuck, 0, 0]}>
+                <group position={[0, tuckD / 2, 0]}>
+                  <Panel w={lidWidth - 2 * skirtTrim} h={tuckD} tex={tex} face="plain" flute="h" />
+                </group>
+              </group>
+            </group>
+          </group>
+        </group>
+      </group>
+    </group>
+  );
+};
+const skirtTrim = 0.12;
+
+// ---------------------------------------------------------------------------
+// FEFCO 0410 wrap-around folder (simplified). Bottom-anchored.
+// Strip: topB / back wall / bottom / front wall / topA, with end-closing
+// flaps on the walls' vertical edges.
+// ---------------------------------------------------------------------------
+const WrapBox: React.FC<OnePieceProps> = ({ L, W, H, p, tex, printCoverageSide }) => {
+  const fFB = stage(p, 0, 0.45);
+  const fEnd = stage(p, 0.45, 0.68);
+  const fA = stage(p, 0.68, 0.84);
+  const fB = stage(p, 0.84, 1);
+
+  const endD = W / 2 - GAP;
+  const topD = W * 0.6;
+  const baseY = -H / 2 + T / 2;
+
+  const wall = (zs: 1 | -1, fold: number, topFold: number, lift: number, printed: boolean) => (
+    <group position={[0, 0, zs * W / 2]} rotation={[zs * HALF_PI * (1 - fold), 0, 0]}>
+      <group position={[0, H / 2, 0]}>
+        <Panel w={L} h={H} tex={tex} face={printed ? 'front' : 'plain'} flute="v" />
+        {/* end-closing flaps on the wall's vertical edges */}
+        {[1, -1].map(xs => (
+          <group key={'e' + xs} position={[xs * (L / 2 - SLOT), 0, 0]} rotation={[0, xs * zs * HALF_PI * fEnd, 0]}>
+            <group position={[xs * endD / 2, 0, 0]}>
+              <Panel w={endD} h={H - 2 * SLOT} tex={tex} face={printCoverageSide ? 'side' : 'plain'} flute="h" />
+            </group>
+          </group>
+        ))}
+        {/* top half-panel folds inward over the opening */}
+        <group position={[0, H / 2 + lift * T * topFold, 0]} rotation={[-zs * HALF_PI * topFold, 0, 0]}>
+          <group position={[0, topD / 2, 0]}>
+            <Panel w={L - 2 * SLOT} h={topD} tex={tex} face="plain" flute="h" />
+          </group>
+        </group>
+      </group>
+    </group>
+  );
+
+  return (
+    <group position={[0, baseY, 0]}>
+      <group rotation={[HALF_PI, 0, 0]}>
+        <Panel w={L} h={W} tex={tex} face="plain" flute="h" />
+      </group>
+      {wall(1, fFB, fA, 0, true)}
+      {wall(-1, fFB, fB, 1, false)}
+    </group>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Dimension line with floating label
+// ---------------------------------------------------------------------------
+const DimensionOverlay = ({ start, end, label, offset, dir }: {
   start: [number, number, number];
   end: [number, number, number];
   label: string;
@@ -483,49 +662,24 @@ const DimensionOverlay = ({
     const s = new THREE.Vector3(...start);
     const e = new THREE.Vector3(...end);
     const shift = new THREE.Vector3();
-    
     if (dir === 'x') shift.set(0, offset, 0);
-    else if (dir === 'y') shift.set(offset, 0, 0);
-    else if (dir === 'z') shift.set(offset, 0, 0);
-
+    else shift.set(offset, 0, 0);
     const fStart = s.clone().add(shift);
     const fEnd = e.clone().add(shift);
     const mid = fStart.clone().lerp(fEnd, 0.5);
-
-    // Ends vertical ticks
-    const tickStart = dir === 'x' 
-      ? [new THREE.Vector3(fStart.x, fStart.y - 0.1, fStart.z), new THREE.Vector3(fStart.x, fStart.y + 0.1, fStart.z)]
-      : [new THREE.Vector3(fStart.x - 0.1, fStart.y, fStart.z), new THREE.Vector3(fStart.x + 0.1, fStart.y, fStart.z)];
-      
-    const tickEnd = dir === 'x'
-      ? [new THREE.Vector3(fEnd.x, fEnd.y - 0.1, fEnd.z), new THREE.Vector3(fEnd.x, fEnd.y + 0.1, fEnd.z)]
-      : [new THREE.Vector3(fEnd.x - 0.1, fEnd.y, fEnd.z), new THREE.Vector3(fEnd.x + 0.1, fEnd.y, fEnd.z)];
-
-    // Construct lines imperatively to avoid JSX TS typings bugs with bufferAttribute
-    const mainGeometry = new THREE.BufferGeometry().setFromPoints([fStart, fEnd]);
-    const mainMaterial = new THREE.LineBasicMaterial({ color: 0x2d3748 });
-    const mainLine = new THREE.Line(mainGeometry, mainMaterial);
-
-    const tickSGeometry = new THREE.BufferGeometry().setFromPoints(tickStart);
-    const tickSMaterial = new THREE.LineBasicMaterial({ color: 0x718096 });
-    const tickSLine = new THREE.Line(tickSGeometry, tickSMaterial);
-
-    const tickEGeometry = new THREE.BufferGeometry().setFromPoints(tickEnd);
-    const tickEMaterial = new THREE.LineBasicMaterial({ color: 0x718096 });
-    const tickELine = new THREE.Line(tickEGeometry, tickEMaterial);
-
-    return { mainLine, tickSLine, tickELine, mid };
+    const tick = (v: THREE.Vector3) => dir === 'x'
+      ? [new THREE.Vector3(v.x, v.y - 0.1, v.z), new THREE.Vector3(v.x, v.y + 0.1, v.z)]
+      : [new THREE.Vector3(v.x - 0.1, v.y, v.z), new THREE.Vector3(v.x + 0.1, v.y, v.z)];
+    const mk = (pts: THREE.Vector3[], color: number) => new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color }));
+    return { mainLine: mk([fStart, fEnd], 0x2d3748), tickSLine: mk(tick(fStart), 0x718096), tickELine: mk(tick(fEnd), 0x718096), mid };
   }, [start, end, offset, dir]);
 
-  // Clean up geometries/materials on unmount to prevent WebGL leaks
   useEffect(() => {
     return () => {
-      linePoints.mainLine.geometry.dispose();
-      (linePoints.mainLine.material as THREE.Material).dispose();
-      linePoints.tickSLine.geometry.dispose();
-      (linePoints.tickSLine.material as THREE.Material).dispose();
-      linePoints.tickELine.geometry.dispose();
-      (linePoints.tickELine.material as THREE.Material).dispose();
+      [linePoints.mainLine, linePoints.tickSLine, linePoints.tickELine].forEach(l => {
+        l.geometry.dispose();
+        (l.material as THREE.Material).dispose();
+      });
     };
   }, [linePoints]);
 
@@ -534,20 +688,8 @@ const DimensionOverlay = ({
       <primitive object={linePoints.mainLine} />
       <primitive object={linePoints.tickSLine} />
       <primitive object={linePoints.tickELine} />
-      {/* Floating Label */}
       <Html position={[linePoints.mid.x, linePoints.mid.y, linePoints.mid.z]} center>
-        <div style={{
-          backgroundColor: '#1a365d',
-          color: '#ffffff',
-          padding: '3px 8px',
-          borderRadius: '4px',
-          fontSize: '10px',
-          fontWeight: 'bold',
-          whiteSpace: 'nowrap',
-          boxShadow: '0 2px 5px rgba(0,0,0,0.15)',
-          border: '1px solid #2b6cb0',
-          fontFamily: 'monospace'
-        }}>
+        <div style={{ backgroundColor: 'rgba(15,23,42,0.88)', color: '#fff', padding: '2px 8px', borderRadius: 999, fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap', fontFamily: 'monospace', boxShadow: '0 1px 4px rgba(0,0,0,0.3)' }}>
           {label}
         </div>
       </Html>
@@ -555,288 +697,11 @@ const DimensionOverlay = ({
   );
 };
 
-// Staple component (small metallic wire mesh)
-const BoxStaple = ({ position }: { position: [number, number, number] }) => (
-  <mesh position={position}>
-    <boxGeometry args={[0.04, 0.015, 0.015]} />
-    <meshStandardMaterial color="#b0bec5" roughness={0.3} metalness={0.8} />
-  </mesh>
-);
-
-// Unified assembly of box panels supporting side-by-side 2D and 3D folding structures
-interface BoxAssemblyProps {
-  length: number;
-  width: number;
-  height: number;
-  fefcoCode: string;
-  fWalls: number;
-  fFlaps: number;
-  wallAngle: number;
-  flapAngle: number;
-  frontTexture: THREE.CanvasTexture | null;
-  backTexture: THREE.CanvasTexture | null;
-  sideTexture: THREE.CanvasTexture | null;
-  plainTexture: THREE.CanvasTexture | null;
-  alphaTexture: THREE.CanvasTexture | null;
-  bumpTexture: THREE.CanvasTexture | null;
-  gluing: boolean;
-  stapling: boolean;
-  hasTopFlaps: boolean;
-  topFlapH: number;
-  bottomFlapH: number;
-  t: number;
-}
-
-const BoxAssembly: React.FC<BoxAssemblyProps> = ({
-  length,
-  width,
-  height,
-  fefcoCode,
-  fWalls,
-  fFlaps,
-  wallAngle,
-  flapAngle,
-  frontTexture,
-  backTexture,
-  sideTexture,
-  plainTexture,
-  alphaTexture,
-  bumpTexture,
-  gluing,
-  stapling,
-  hasTopFlaps,
-  topFlapH,
-  bottomFlapH,
-  t,
-}) => {
-  // FEFCO 300 Lid calculations
-  const lidL = length + 0.12;
-  const lidW = width + 0.12;
-  const lidH = 0.35;
-  
-  // Lid positions: when folded (fFlaps = 1), sits on top. When flat, slides to the side out of layout bounds
-  const lidZOffset = (width / 2 + bottomFlapH + lidW / 2 + 0.5) * (1.0 - fFlaps);
-  
-  // Rims on lid fold from horizontal (90 deg relative to lid) inwards to vertical (0 deg relative to lid)
-  const lidFlapAngle = (1.0 - fFlaps) * (Math.PI / 2);
-  
-  // Lid height: sits on box top when closed (fFlaps = 1), lies flat on ground when open (fFlaps = 0)
-  const lidY = (height / 2 + lidH / 2) * fFlaps + (t / 2) * (1.0 - fFlaps);
-
-  return (
-    <group castShadow receiveShadow>
-      {/* 1. FRONT PANEL GROUP (Stationary Anchor) */}
-      <group position={[0, 0, (width / 2) * fWalls]}>
-        <CardboardPanel 
-          width={length} 
-          height={height} 
-          thickness={t} 
-          colorTexture={frontTexture}
-          alphaTexture={null}
-          bumpTexture={bumpTexture}
-        />
-
-        {/* Front Top Flap */}
-        {hasTopFlaps && topFlapH > 0 && (
-          <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
-            <group position={[0, topFlapH / 2, 0]}>
-              <CardboardPanel width={length} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-            </group>
-          </group>
-        )}
-
-        {/* Front Bottom Flap */}
-        {bottomFlapH > 0 && (
-          <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
-            <group position={[0, -bottomFlapH / 2, 0]}>
-              <CardboardPanel width={length} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-            </group>
-          </group>
-        )}
-
-        {/* 2. RIGHT PANEL GROUP (Hinged to right side of Front) */}
-        <group position={[length / 2, 0, 0]} rotation={[0, -wallAngle, 0]}>
-          <group position={[width / 2, 0, 0]}>
-            <CardboardPanel 
-              width={width} 
-              height={height} 
-              thickness={t} 
-              colorTexture={sideTexture}
-              alphaTexture={alphaTexture}
-              bumpTexture={bumpTexture}
-            />
-
-            {/* Right Top Flap */}
-            {hasTopFlaps && topFlapH > 0 && (
-              <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
-                <group position={[0, topFlapH / 2, 0]}>
-                  <CardboardPanel width={width} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-                </group>
-              </group>
-            )}
-
-            {/* Right Bottom Flap */}
-            {bottomFlapH > 0 && (
-              <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
-                <group position={[0, -bottomFlapH / 2, 0]}>
-                  <CardboardPanel width={width} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-                </group>
-              </group>
-            )}
-          </group>
-
-          {/* 3. BACK PANEL GROUP (Hinged to right side of Right) */}
-          <group position={[width, 0, 0]} rotation={[0, -wallAngle, 0]}>
-            <group position={[length / 2, 0, 0]}>
-              <CardboardPanel 
-                width={length} 
-                height={height} 
-                thickness={t} 
-                colorTexture={backTexture}
-                alphaTexture={null}
-                bumpTexture={bumpTexture}
-              />
-
-              {/* Back Top Flap */}
-              {hasTopFlaps && topFlapH > 0 && (
-                <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
-                  <group position={[0, topFlapH / 2, 0]}>
-                    <CardboardPanel width={length} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-                  </group>
-                </group>
-              )}
-
-              {/* Back Bottom Flap */}
-              {bottomFlapH > 0 && (
-                <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
-                  <group position={[0, -bottomFlapH / 2, 0]}>
-                    <CardboardPanel width={length} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-                  </group>
-                </group>
-              )}
-            </group>
-          </group>
-        </group>
-
-        {/* 4. LEFT PANEL GROUP (Hinged to left side of Front) */}
-        <group position={[-length / 2, 0, 0]} rotation={[0, wallAngle, 0]}>
-          <group position={[-width / 2, 0, 0]}>
-            <CardboardPanel 
-              width={width} 
-              height={height} 
-              thickness={t} 
-              colorTexture={sideTexture}
-              alphaTexture={alphaTexture}
-              bumpTexture={bumpTexture}
-            />
-
-            {/* Left Top Flap */}
-            {hasTopFlaps && topFlapH > 0 && (
-              <group position={[0, height / 2, 0]} rotation={[-flapAngle, 0, 0]}>
-                <group position={[0, topFlapH / 2, 0]}>
-                  <CardboardPanel width={width} height={topFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-                </group>
-              </group>
-            )}
-
-            {/* Left Bottom Flap */}
-            {bottomFlapH > 0 && (
-              <group position={[0, -height / 2, 0]} rotation={[flapAngle, 0, 0]}>
-                <group position={[0, -bottomFlapH / 2, 0]}>
-                  <CardboardPanel width={width} height={bottomFlapH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-                </group>
-              </group>
-            )}
-
-            {/* GLUE TAB / CORNER JOINT FLAP */}
-            <group position={[-width / 2, 0, 0]} rotation={[0, -wallAngle, 0]}>
-              <group position={[0.15, 0, 0]}>
-                <CardboardPanel 
-                  width={0.3} 
-                  height={height - 0.1} 
-                  thickness={t - 0.005} 
-                  colorTexture={plainTexture}
-                  alphaTexture={null}
-                  bumpTexture={bumpTexture}
-                  isGlueTab={true}
-                />
-                
-                {/* Adhesive Seam Visual (Glossy Hot-Melt Glue Beads) */}
-                {gluing && (
-                  <group position={[0, 0, t / 2 + 0.004]}>
-                    <mesh position={[0, height * 0.2, 0]}>
-                      <cylinderGeometry args={[0.012, 0.012, height * 0.18, 8]} />
-                      <meshStandardMaterial color="#e5c158" roughness={0.15} metalness={0.0} transparent opacity={0.75} />
-                    </mesh>
-                    <mesh position={[0, 0, 0]}>
-                      <cylinderGeometry args={[0.012, 0.012, height * 0.18, 8]} />
-                      <meshStandardMaterial color="#e5c158" roughness={0.15} metalness={0.0} transparent opacity={0.75} />
-                    </mesh>
-                    <mesh position={[0, -height * 0.2, 0]}>
-                      <cylinderGeometry args={[0.012, 0.012, height * 0.18, 8]} />
-                      <meshStandardMaterial color="#e5c158" roughness={0.15} metalness={0.0} transparent opacity={0.75} />
-                    </mesh>
-                  </group>
-                )}
-              </group>
-            </group>
-
-            {/* Metal Staples along Joint Seam (rendered if stapling enabled) */}
-            {stapling && (
-              <group position={[-width / 2, 0, 0]}>
-                <BoxStaple position={[-0.04, height * 0.3, t]} />
-                <BoxStaple position={[-0.04, height * 0.1, t]} />
-                <BoxStaple position={[-0.04, -height * 0.1, t]} />
-                <BoxStaple position={[-0.04, -height * 0.3, t]} />
-              </group>
-            )}
-          </group>
-        </group>
-      </group>
-
-      {/* --- TELESCOPIC LID (RENDERED ONLY FOR FEFCO 300) --- */}
-      {fefcoCode === '300' && (
-        <group position={[0, lidY, -lidZOffset]}>
-          {/* Lid Top Face (horizontal) */}
-          <group position={[0, 0, 0]} rotation={[Math.PI / 2, 0, 0]}>
-            <CardboardPanel width={lidL} height={lidW} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-          </group>
-
-          {/* Lid Front Rim Hinge: rotated around local X by lidFlapAngle, centered downwards */}
-          <group position={[0, 0, lidW / 2]} rotation={[-lidFlapAngle, 0, 0]}>
-            <group position={[0, -lidH / 2, 0]}>
-              <CardboardPanel width={lidL} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-            </group>
-          </group>
-
-          {/* Lid Back Rim Hinge: rotated around local X by -lidFlapAngle, centered downwards */}
-          <group position={[0, 0, -lidW / 2]} rotation={[lidFlapAngle, 0, 0]}>
-            <group position={[0, -lidH / 2, 0]}>
-              <CardboardPanel width={lidL} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-            </group>
-          </group>
-
-          {/* Lid Right Rim Hinge: rotated around local Z by -lidFlapAngle, facing sideways */}
-          <group position={[lidL / 2, 0, 0]} rotation={[0, 0, -lidFlapAngle]}>
-            <group position={[0, -lidH / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
-              <CardboardPanel width={lidW} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-            </group>
-          </group>
-
-          {/* Lid Left Rim Hinge: rotated around local Z by lidFlapAngle, facing sideways */}
-          <group position={[-lidL / 2, 0, 0]} rotation={[0, 0, lidFlapAngle]}>
-            <group position={[0, -lidH / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
-              <CardboardPanel width={lidW} height={lidH} thickness={t} colorTexture={plainTexture} alphaTexture={null} bumpTexture={bumpTexture} />
-            </group>
-          </group>
-        </group>
-      )}
-    </group>
-  );
-};
-
+// ---------------------------------------------------------------------------
+// Main component (public interface unchanged)
+// ---------------------------------------------------------------------------
 interface BoxConfigProps {
-  length?: number;    // scaled dimensions in decimeters (e.g. 4.0 = 400mm)
+  length?: number;
   width?: number;
   height?: number;
   material?: string;
@@ -844,8 +709,8 @@ interface BoxConfigProps {
   dieCutting?: boolean;
   gluing?: boolean;
   stapling?: boolean;
-  foldPercent?: number; // 0 (flat pattern) to 1 (fully folded box)
-  fefcoCode?: string;  // "201" | "200" | "203" | "300"
+  foldPercent?: number;
+  fefcoCode?: string; // '200'|'201'|'202'|'203'|'300'|'301'|'427'|'410'
   printColor?: string;
   printText?: string;
   hasRecycling?: boolean;
@@ -876,269 +741,153 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   viewMode = 'box',
   logoUrl = '',
 }) => {
-  // Pre-load custom brand logo image
   const [logoImage, setLogoImage] = React.useState<HTMLImageElement | null>(null);
-
   useEffect(() => {
-    if (!logoUrl) {
-      setLogoImage(null);
-      return;
-    }
+    if (!logoUrl) { setLogoImage(null); return; }
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.src = logoUrl;
-    img.onload = () => {
-      setLogoImage(img);
-    };
-    img.onerror = () => {
-      console.error('Failed to load custom brand logo image:', logoUrl);
-      setLogoImage(null);
-    };
+    img.onload = () => setLogoImage(img);
+    img.onerror = () => { console.error('Failed to load custom brand logo image:', logoUrl); setLogoImage(null); };
   }, [logoUrl]);
 
-  // Generate textures once for the entire scene (optimizes rendering)
-  const { plainTexture, printedTexture, alphaTexture, bumpTexture } = useCardboardTextures(
-    material,
-    dieCutting,
-    printColor,
-    printText,
-    hasRecycling,
-    hasFragile,
-    hasUpArrows,
-    logoImage
+  const L = length, W = width, H = height;
+  const tex = useCardboardTextures(
+    material, dieCutting, printColor, printText,
+    hasRecycling, hasFragile, hasUpArrows, logoImage,
+    printing ? L / H : 1, printing ? W / H : 1
   );
 
-  // Define texture mappings based on coverage selection
-  const frontTexture = printing ? printedTexture : plainTexture;
-  const backTexture = printing && (printCoverage === 'front-back' || printCoverage === 'all') ? printedTexture : plainTexture;
-  const sideTexture = printing && printCoverage === 'all' ? printedTexture : plainTexture;
+  // Blank front face: printed when printing is on; back/sides per coverage.
+  const texForBox: TexSet = useMemo(() => ({
+    ...tex,
+    printedFront: printing ? tex.printedFront : tex.plain,
+    printedSide: printing && printCoverage === 'all' ? tex.printedSide : tex.plain,
+  }), [tex, printing, printCoverage]);
+  const coverBack = printing && (printCoverage === 'front-back' || printCoverage === 'all');
+  const coverSide = printing && printCoverage === 'all';
 
-  // Ensure foldPercent is treated as a clean number type
-  const numericFold = typeof foldPercent === 'string' ? parseFloat(foldPercent) : foldPercent;
+  const numericFold = typeof foldPercent === 'string' ? parseFloat(foldPercent as any) : foldPercent;
+  const p = Math.min(1, Math.max(0, numericFold));
 
-  // Stage interpolators:
-  // fWalls: folding walls from flat sheet into vertical box tube (range [0, 0.5])
-  const fWalls = Math.min(1.0, Math.max(0.0, numericFold * 2.0));
-  // fFlaps: folding top and bottom flaps inside to close box lids (range [0.5, 1.0])
-  const fFlaps = Math.min(1.0, Math.max(0.0, (numericFold - 0.5) * 2.0));
+  const style = fefcoCode || '201';
+  const bottomAnchored = style === '427' || style === '410';
+  const isScope = style === '300' || style === '301';
 
-  const t = 0.04; // cardboard panel thickness
-  
-  // Dynamic Flap heights based on FEFCO Style selection
-  const { topFlapH, bottomFlapH, hasTopFlaps } = useMemo(() => {
-    switch (fefcoCode) {
-      case '200': // Open Top: No top flaps, bottom flaps meet in middle
-        return { topFlapH: 0, bottomFlapH: width / 2, hasTopFlaps: false };
-      case '203': // Overlapping: Flaps are full width (fully overlaps top and bottom)
-        return { topFlapH: width, bottomFlapH: width, hasTopFlaps: true };
-      case '300': // Telescopic Lid: Separate lid, tray has no top flaps, bottom flaps meet in middle
-        return { topFlapH: 0, bottomFlapH: width / 2, hasTopFlaps: false };
-      case '201': // Standard Slotted: Top & bottom flaps meet in middle
-      default:
-        return { topFlapH: width / 2, bottomFlapH: width / 2, hasTopFlaps: true };
-    }
-  }, [fefcoCode, width]);
+  const fW = stage(p, 0, 0.5);
 
-  // Hinge angles. Walls hinge inward (negative Y rotation) so the side/back
-  // panels wrap into a closed box instead of splaying outward.
-  const wallAngle = -(Math.PI / 2) * fWalls;
-  const flapAngle = (Math.PI / 2) * fFlaps;
+  // Grounding. Slotted blanks tilt from a vertical sheet down onto the floor;
+  // bottom-anchored styles (mailer/wrap) are already flat at fold 0.
+  const groundY = -H / 2 - 2 * T - 0.012;
+  const slottedFlatY = groundY + T / 2 + 0.008;
+  const groupY = bottomAnchored ? -1.5 * T : slottedFlatY * (1 - fW);
+  const groupTilt = bottomAnchored ? 0 : -HALF_PI * (1 - fW);
 
-  // Single-box presentation: lay the flat blank down on the floor at 0% and
-  // tilt it upright as the walls rise, so it never reads as a vertical sheet
-  // floating in mid-air. Once the walls are fully up (fWalls = 1) the tilt is
-  // zero, leaving the folded/closed states untouched.
-  const assemblyTilt = -(Math.PI / 2) * (1 - fWalls);
-  // Keep the base resting on the ground plane as the blank rises: centered box
-  // bottom sits at the grid when upright, flat sheet lies on the grid at 0%.
-  const groundedY = -0.02 - (height / 2) * (1 - fWalls);
+  // Camera fit: interpolates between the flat-blank footprint and the folded
+  // box extent as the slider moves.
+  const majDFit = style === '203' ? W : style === '202' ? W * 0.65 : W / 2;
+  const flatExtent = bottomAnchored
+    ? Math.max(L + 2 * H + 2, 2 * W + 3 * H + 1)
+    : Math.max(2 * L + 2 * W + 1.2, H + 2 * majDFit + 0.5) + (isScope ? (W + 2) : 0);
+  const foldedExtent = bottomAnchored
+    ? Math.max(L, W, H + W * 0.8) + 1.2
+    : Math.max(L, W, H + 2 * majDFit) + (isScope ? 1.5 : 0);
+  const singleFit = flatExtent * 1.35 * (1 - fW) + foldedExtent * 1.9 * fW;
+  const dualFit = flatExtent * 1.2 + foldedExtent * 0.8;
+  const fitRadius = Math.max(7, viewMode === 'flat-box' ? dualFit : singleFit);
 
-  // Camera fit: account for the box footprint plus any open flaps that extend
-  // beyond the body, so the framing covers the tallest fold state. The
-  // flat-box view lays the unfolded blank and the 3D box side by side, so it
-  // spans roughly 2.5x the box length and needs a wider fit.
-  const verticalExtent = height + (hasTopFlaps ? topFlapH : 0) + bottomFlapH;
-  const singleExtent = Math.max(length, width, verticalExtent);
-  const maxExtent = viewMode === 'flat-box' ? Math.max(singleExtent, 2.6 * length) : singleExtent;
-  const fitRadius = Math.max(7, maxExtent * 1.9);
+  // The slotted blank extends asymmetrically to +x (right+back+left panels
+  // chain to one side); re-centre it while flat so it orbits nicely.
+  const blankShiftX = bottomAnchored ? 0 : -(L / 2) * (1 - fW);
 
-  // Auto-rotation idle timers
   const [autoRotate, setAutoRotate] = React.useState(true);
   const controlsRef = useRef<any>(null);
   const timerRef = React.useRef<NodeJS.Timeout | null>(null);
-
   const handleInteractionStart = () => {
     setAutoRotate(false);
     if (timerRef.current) clearTimeout(timerRef.current);
   };
-
   const handleInteractionEnd = () => {
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      setAutoRotate(true);
-    }, 6000); // Resume auto-rotate after 6 seconds of idle inactivity
+    timerRef.current = setTimeout(() => setAutoRotate(true), 6000);
   };
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
 
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
+  const assembly = (foldP: number) => bottomAnchored
+    ? (style === '427'
+      ? <MailerBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} />
+      : <WrapBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} />)
+    : <SlottedBox L={L} W={W} H={H} style={style} p={foldP} tex={texForBox} printCoverageBack={coverBack} printCoverageSide={coverSide} withHandles={dieCutting && !isScope} gluing={gluing} stapling={stapling} />;
+
+  // Flat blank presentation for the side-by-side view
+  const flatBlank = bottomAnchored ? (
+    <group position={[-(L + 2 * H) * 0.7 - L / 2, 0, 0]}>
+      <group position={[0, -1.5 * T, 0]}>{assembly(0)}</group>
+    </group>
+  ) : (
+    <group position={[-(L + W) - 1.2, slottedFlatY, 0]} rotation={[-HALF_PI, 0, 0]}>
+      {assembly(0)}
+    </group>
+  );
 
   return (
-    <Canvas camera={{ position: [9, 7.5, 9], fov: 42 }} shadows gl={{ preserveDrawingBuffer: true }}>
+    <Canvas camera={{ position: [9, 7, 9], fov: 42 }} shadows dpr={[1, 2]} gl={{ preserveDrawingBuffer: true, antialias: true }}>
       <CameraRig fitRadius={fitRadius} controlsRef={controlsRef} />
-      <ambientLight intensity={0.6} />
-      
-      {/* Dynamic Key Studio Light */}
-      <directionalLight 
-        position={[5, 8, 5]} 
-        intensity={0.8} 
-        castShadow 
-        shadow-mapSize={[2048, 2048]} 
-        shadow-bias={-0.0001}
-      />
-      
-      {/* Studio Fill Light */}
-      <directionalLight position={[-5, 4, -5]} intensity={0.3} />
-      
-      {/* Point highlight for tactile staples/glue gloss */}
-      <pointLight position={[0, 4, 2]} intensity={0.4} />
+      <color attach="background" args={['#e9eef5']} />
+      <fog attach="fog" args={['#e9eef5', fitRadius * 2.2, fitRadius * 5]} />
 
-      {/* Ground Floor Stage */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -height / 2 - 0.02, 0]} receiveShadow>
-        <planeGeometry args={[50, 50]} />
-        <meshStandardMaterial color="#f7fafc" roughness={0.8} />
+      <ambientLight intensity={0.55} />
+      <directionalLight position={[6, 10, 5]} intensity={1.1} castShadow shadow-mapSize={[2048, 2048]} shadow-bias={-0.0002} shadow-normalBias={0.02}>
+        <orthographicCamera attach="shadow-camera" args={[-24, 24, 18, -18, 1, 60]} />
+      </directionalLight>
+      <directionalLight position={[-6, 5, -6]} intensity={0.3} />
+      <Environment frames={1} resolution={64}>
+        <Lightformer intensity={0.9} rotation-x={HALF_PI} position={[0, 5, 0]} scale={[12, 12, 1]} />
+        <Lightformer intensity={0.45} rotation-y={HALF_PI} position={[-8, 3, 0]} scale={[10, 4, 1]} />
+        <Lightformer intensity={0.45} rotation-y={-HALF_PI} position={[8, 3, 0]} scale={[10, 4, 1]} />
+      </Environment>
+
+      {/* studio floor */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, groundY - 0.004, 0]} receiveShadow>
+        <circleGeometry args={[Math.max(40, fitRadius * 2.4), 64]} />
+        <meshStandardMaterial color="#d6dce4" roughness={0.96} />
       </mesh>
 
-      {/* Floor grid overlay matching CRM styling */}
-      <gridHelper args={[30, 30, '#cbd5e0', '#e2e8f0']} position={[0, -height / 2 - 0.015, 0]} />
-
-      <group position={[0, 0, 0]}>
-        {/* VIEWMODE: SINGLE 3D BOX VIEW */}
+      <group>
         {viewMode === 'box' && (
-          <group position={[0, groundedY, 0]} rotation={[assemblyTilt, 0, 0]}>
-            <BoxAssembly
-              length={length}
-              width={width}
-              height={height}
-              fefcoCode={fefcoCode}
-              fWalls={fWalls}
-              fFlaps={fFlaps}
-              wallAngle={wallAngle}
-              flapAngle={flapAngle}
-              frontTexture={frontTexture}
-              backTexture={backTexture}
-              sideTexture={sideTexture}
-              plainTexture={plainTexture}
-              alphaTexture={alphaTexture}
-              bumpTexture={bumpTexture}
-              gluing={gluing}
-              stapling={stapling}
-              hasTopFlaps={hasTopFlaps}
-              topFlapH={topFlapH}
-              bottomFlapH={bottomFlapH}
-              t={t}
-            />
+          <group position={[blankShiftX, groupY, 0]} rotation={[groupTilt, 0, 0]}>
+            {assembly(p)}
           </group>
         )}
 
-        {/* VIEWMODE: 2D FLAT PATTERN & 3D BOX SIDE-BY-SIDE */}
         {viewMode === 'flat-box' && (
           <group>
-            {/* 2D Flat Sheet Layout (positioned on the left, rotated flat on the ground) */}
-            <group position={[-length - 0.8, -height / 2 + 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-              <BoxAssembly 
-                length={length}
-                width={width}
-                height={height}
-                fefcoCode={fefcoCode}
-                fWalls={0}
-                fFlaps={0}
-                wallAngle={0}
-                flapAngle={0}
-                frontTexture={frontTexture}
-                backTexture={backTexture}
-                sideTexture={sideTexture}
-                plainTexture={plainTexture}
-                alphaTexture={alphaTexture}
-                bumpTexture={bumpTexture}
-                gluing={gluing}
-                stapling={stapling}
-                hasTopFlaps={hasTopFlaps}
-                topFlapH={topFlapH}
-                bottomFlapH={bottomFlapH}
-                t={t}
-              />
-            </group>
-
-            {/* 3D Folding Box (positioned on the right) */}
-            <group position={[length / 2 + 0.3, 0, 0]}>
-              <BoxAssembly 
-                length={length}
-                width={width}
-                height={height}
-                fefcoCode={fefcoCode}
-                fWalls={fWalls}
-                fFlaps={fFlaps}
-                wallAngle={wallAngle}
-                flapAngle={flapAngle}
-                frontTexture={frontTexture}
-                backTexture={backTexture}
-                sideTexture={sideTexture}
-                plainTexture={plainTexture}
-                alphaTexture={alphaTexture}
-                bumpTexture={bumpTexture}
-                gluing={gluing}
-                stapling={stapling}
-                hasTopFlaps={hasTopFlaps}
-                topFlapH={topFlapH}
-                bottomFlapH={bottomFlapH}
-                t={t}
-              />
+            {flatBlank}
+            <group position={[L / 2 + 0.5, 0, 0]}>
+              <group position={[0, groupY, 0]} rotation={[groupTilt, 0, 0]}>
+                {assembly(p)}
+              </group>
             </group>
           </group>
         )}
 
-        {/* --- DYNAMIC DIMENSIONS OVERLAYS (only once the box stands upright) --- */}
-        {numericFold >= 0.5 && (
-          <group position={viewMode === 'flat-box' ? [length / 2 + 0.3, 0, 0] : [0, 0, 0]}>
-            {/* Length Dimension Line (Front Bottom) */}
-            <DimensionOverlay
-              start={[-length / 2, -height / 2, width / 2]}
-              end={[length / 2, -height / 2, width / 2]}
-              label={`${Math.round(length * 100)} mm`}
-              offset={-0.6}
-              dir="x"
-            />
-
-            {/* Height Dimension Line (Left Side Front Corner) */}
-            <DimensionOverlay
-              start={[-length / 2, -height / 2, width / 2]}
-              end={[-length / 2, height / 2, width / 2]}
-              label={`${Math.round(height * 100)} mm`}
-              offset={-0.6}
-              dir="y"
-            />
-
-            {/* Width Dimension Line (Right Side Bottom Panel) */}
-            <DimensionOverlay
-              start={[length / 2, -height / 2, width / 2]}
-              end={[length / 2, -height / 2, -width / 2]}
-              label={`${Math.round(width * 100)} mm`}
-              offset={0.6}
-              dir="z"
-            />
+        {/* dimension overlays once the box stands upright */}
+        {p >= 0.5 && (
+          <group position={viewMode === 'flat-box' ? [L / 2 + 0.5, 0, 0] : [0, 0, 0]}>
+            <DimensionOverlay start={[-L / 2, -H / 2, W / 2]} end={[L / 2, -H / 2, W / 2]} label={`${Math.round(L * 100)} mm`} offset={-0.6} dir="x" />
+            <DimensionOverlay start={[-L / 2, -H / 2, W / 2]} end={[-L / 2, H / 2, W / 2]} label={`${Math.round(H * 100)} mm`} offset={-0.6} dir="y" />
+            <DimensionOverlay start={[L / 2, -H / 2, W / 2]} end={[L / 2, -H / 2, -W / 2]} label={`${Math.round(W * 100)} mm`} offset={0.6} dir="z" />
           </group>
         )}
       </group>
 
       <OrbitControls
         ref={controlsRef}
-        minDistance={2}
-        maxDistance={45}
+        minDistance={2.5}
+        maxDistance={70}
         autoRotate={autoRotate}
         autoRotateSpeed={0.8}
+        maxPolarAngle={HALF_PI - 0.03}
         onStart={handleInteractionStart}
         onEnd={handleInteractionEnd}
       />

@@ -1594,8 +1594,12 @@ const ProductConfigurator: React.FC = () => {
             <select value={params.fefco_code} onChange={e => setParams({...params, fefco_code: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
               <option value="201">FEFCO 201 (Standard Slotted Box)</option>
               <option value="200">FEFCO 200 (Half Slotted Open Box)</option>
+              <option value="202">FEFCO 202 (Partial Overlap Slotted)</option>
               <option value="203">FEFCO 203 (Fully Overlapping Flaps)</option>
               <option value="300">FEFCO 300 (Telescopic Lid & Tray)</option>
+              <option value="301">FEFCO 301 (Full Telescope Box)</option>
+              <option value="427">FEFCO 427 (Die-Cut Mailer)</option>
+              <option value="410">FEFCO 410 (Wrap-Around Folder)</option>
             </select>
           </div>
 
