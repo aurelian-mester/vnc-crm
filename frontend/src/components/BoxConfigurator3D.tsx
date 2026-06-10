@@ -401,9 +401,9 @@ const SlottedBox: React.FC<SlottedProps> = ({ L, W, H, style, p, tex, lidTex, pr
   const majorW = L - 2 * SLOT;
   const minorW = W - 2 * SLOT;
 
-  // FEFCO 300/301 telescopic lid
-  const isScope = style === '300' || style === '301';
-  const rimH = style === '301' ? H * 0.96 : Math.max(0.4, H * 0.24);
+  // FEFCO 300/301/302 telescopic lid: shallow cap, partial or full telescope
+  const isScope = style === '300' || style === '301' || style === '302';
+  const rimH = style === '302' ? H * 0.97 : style === '301' ? H * 0.62 : Math.max(0.4, H * 0.24);
   const clear = 0.07;
   const lidL = L + 2 * clear + 2 * T;
   const lidW = W + 2 * clear + 2 * T;
@@ -605,26 +605,27 @@ const MailerBox: React.FC<OnePieceProps & { withLid?: boolean }> = ({ L, W, H, p
 const skirtTrim = 0.12;
 
 // ---------------------------------------------------------------------------
-// FEFCO 0410 wrap-around folder (simplified). Bottom-anchored.
-// Strip: topB / back wall / bottom / front wall / topA, with end-closing
-// flaps on the walls' vertical edges.
+// FEFCO 0410 wrap-around folder and 0401 one-piece book wrap (simplified).
+// Bottom-anchored. Strip: topB / back wall / bottom / front wall / topA.
+// 0410 closes its ends with flaps on the walls' vertical edges; 0401 raises
+// end walls hinged on the bottom instead and overlaps its wings more.
 // ---------------------------------------------------------------------------
-const WrapBox: React.FC<OnePieceProps> = ({ L, W, H, p, tex, printCoverageSide }) => {
+const WrapBox: React.FC<OnePieceProps & { folder?: boolean }> = ({ L, W, H, p, tex, printCoverageSide, folder = false }) => {
   const fFB = stage(p, 0, 0.45);
   const fEnd = stage(p, 0.45, 0.68);
   const fA = stage(p, 0.68, 0.84);
   const fB = stage(p, 0.84, 1);
 
   const endD = W / 2 - GAP;
-  const topD = W * 0.6;
+  const topD = folder ? W * 0.66 : W * 0.6;
   const baseY = -H / 2 + T / 2;
 
   const wall = (zs: 1 | -1, fold: number, topFold: number, lift: number, printed: boolean) => (
     <group position={[0, 0, zs * W / 2]} rotation={[zs * HALF_PI * (1 - fold), 0, 0]}>
       <group position={[0, H / 2, 0]}>
         <Panel w={L} h={H} tex={tex} face={printed ? 'front' : 'plain'} flute="v" />
-        {/* end-closing flaps on the wall's vertical edges */}
-        {[1, -1].map(xs => (
+        {/* end-closing flaps on the wall's vertical edges (0410 only) */}
+        {!folder && [1, -1].map(xs => (
           <group key={'e' + xs} position={[xs * (L / 2 - SLOT), 0, 0]} rotation={[0, xs * zs * HALF_PI * fEnd, 0]}>
             <group position={[xs * endD / 2, 0, 0]}>
               <Panel w={endD} h={H - 2 * SLOT} tex={tex} face={printCoverageSide ? 'side' : 'plain'} flute="h" />
@@ -648,6 +649,14 @@ const WrapBox: React.FC<OnePieceProps> = ({ L, W, H, p, tex, printCoverageSide }
       </group>
       {wall(1, fFB, fA, 0, true)}
       {wall(-1, fFB, fB, 1, false)}
+      {/* 0401: end walls hinged on the bottom rise before the wings close */}
+      {folder && [1, -1].map(xs => (
+        <group key={'few' + xs} position={[xs * L / 2, 0, 0]} rotation={[0, 0, (xs as number) * -HALF_PI * (1 - fEnd)]}>
+          <group position={[0, H / 2, 0]} rotation={[0, HALF_PI, 0]}>
+            <Panel w={W - 2 * SLOT} h={H} tex={tex} face={printCoverageSide ? 'side' : 'plain'} flute="v" />
+          </group>
+        </group>
+      ))}
     </group>
   );
 };
@@ -724,6 +733,98 @@ const SleeveBox: React.FC<OnePieceProps & { lidTex: TexSet }> = ({ L, W, H, p, t
           </group>
         ))}
       </group>
+    </group>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// FEFCO 0601 bliss box: a U-shaped body (bottom + two long walls with glue
+// flanges) plus two separate end panels that fold up beside the body and
+// slide in to glue onto the flanges. End panels use the secondary board.
+// ---------------------------------------------------------------------------
+const BlissBox: React.FC<OnePieceProps & { lidTex: TexSet }> = ({ L, W, H, p, tex, lidTex, printCoverageSide }) => {
+  const fWalls = stage(p, 0, 0.35);
+  const fFlange = stage(p, 0.35, 0.55);
+  const fCapUp = stage(p, 0.55, 0.75);
+  const fCapIn = stage(p, 0.75, 1);
+  const flangeW = Math.min(L * 0.14, 0.6);
+  const baseY = -H / 2 + T / 2;
+
+  return (
+    <group position={[0, baseY, 0]}>
+      {/* bottom */}
+      <group rotation={[HALF_PI, 0, 0]}>
+        <Panel w={L} h={W} tex={tex} face="plain" flute="h" />
+      </group>
+      {/* long walls with glue flanges */}
+      {[1, -1].map(zs => (
+        <group key={'bw' + zs} position={[0, 0, zs * W / 2]} rotation={[zs * HALF_PI * (1 - fWalls), 0, 0]}>
+          <group position={[0, H / 2, 0]}>
+            <Panel w={L} h={H} tex={tex} face={zs === 1 ? 'front' : 'plain'} flute="v" />
+            {[1, -1].map(xs => (
+              <group key={'fl' + xs} position={[xs * (L / 2 - SLOT), 0, 0]} rotation={[0, xs * zs * HALF_PI * fFlange, 0]}>
+                <group position={[xs * flangeW / 2, 0, 0]}>
+                  <Panel w={flangeW} h={H - 2 * SLOT} tex={tex} face="plain" flute="h" />
+                </group>
+              </group>
+            ))}
+          </group>
+        </group>
+      ))}
+      {/* end panels: fold up from the floor beside the body, then slide in */}
+      {[1, -1].map(xs => (
+        <group key={'cap' + xs} position={[xs * (L / 2 + 0.02 + 0.9 * (1 - fCapIn)), 0, 0]} rotation={[0, 0, xs * -HALF_PI * (1 - fCapUp)]}>
+          <group position={[0, H / 2, 0]} rotation={[0, HALF_PI, 0]}>
+            <Panel w={W} h={H} tex={lidTex} face={printCoverageSide ? 'side' : 'plain'} flute="v" />
+          </group>
+        </group>
+      ))}
+    </group>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// FEFCO 0933 partition / divider insert: crossed interlocking strips
+// (2 longitudinal x 3 transverse = 12 cells). The longitudinal strips rise
+// in place; the transverse ones rise beside, travel over and drop into the
+// slots from above.
+// ---------------------------------------------------------------------------
+const PartitionGrid: React.FC<{ L: number; W: number; H: number; p: number; tex: TexSet }> = ({ L, W, H, p, tex }) => {
+  const fLong = stage(p, 0, 0.45);
+  const fUp = stage(p, 0.45, 0.62);
+  const fOver = stage(p, 0.62, 0.8);
+  const fDrop = stage(p, 0.8, 1);
+  const longZ = [-W / 6, W / 6];
+  const crossX = [-L / 4, 0, L / 4];
+  const baseY = -H / 2;
+
+  return (
+    <group>
+      {/* longitudinal strips rise in place from a flat spread */}
+      {longZ.map((z, i) => {
+        const zFlat = (i === 0 ? -1 : 1) * (H + 0.4);
+        const zi = zFlat + (z - zFlat) * fLong;
+        return (
+          <group key={'lg' + i} position={[0, baseY, zi]} rotation={[-HALF_PI * (1 - fLong), 0, 0]}>
+            <group position={[0, H / 2, 0]}>
+              <Panel w={L} h={H} tex={tex} face="plain" flute="h" />
+            </group>
+          </group>
+        );
+      })}
+      {/* transverse strips rise beside, lift over and drop into the grid */}
+      {crossX.map((x, j) => {
+        const xFlat = L / 2 + 0.6 + j * (H + 0.4);
+        const xi = xFlat + (x - xFlat) * fOver;
+        const yLift = Math.max(0, H * 1.7 * (Math.min(1, fOver * 2.5) - fDrop));
+        return (
+          <group key={'cr' + j} position={[xi, baseY + yLift, 0]} rotation={[0, 0, -HALF_PI * (1 - fUp)]}>
+            <group position={[0, H / 2, 0]} rotation={[0, HALF_PI, 0]}>
+              <Panel w={W} h={H} tex={tex} face="plain" flute="h" />
+            </group>
+          </group>
+        );
+      })}
     </group>
   );
 };
@@ -858,7 +959,7 @@ interface BoxConfigProps {
   gluing?: boolean;
   stapling?: boolean;
   foldPercent?: number;
-  fefcoCode?: string; // '200'|'201'|'202'|'203'|'204'|'300'|'301'|'427'|'410'|'421'|'501'|'711'
+  fefcoCode?: string; // 02xx slotted, 03xx telescope, 04xx folder/tray, 0501, 0601, 0711, 0933
   lidMaterial?: string; // separate board grade for the lid/sleeve of two-piece styles
   printColor?: string;
   printText?: string;
@@ -930,8 +1031,8 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   const p = Math.min(1, Math.max(0, numericFold));
 
   const style = fefcoCode || '201';
-  const bottomAnchored = style === '427' || style === '410' || style === '421' || style === '501';
-  const isScope = style === '300' || style === '301';
+  const bottomAnchored = ['427', '410', '421', '501', '401', '601', '933'].includes(style);
+  const isScope = style === '300' || style === '301' || style === '302';
 
   const fW = stage(p, 0, 0.5);
 
@@ -972,7 +1073,11 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   const flatExtent = bottomAnchored
     ? (style === '501'
       ? Math.max(L + 2 * H + 2, 2.5 * W + 2 * H + 4) // tray cross + sleeve strip beside it
-      : Math.max(L + 2 * H + 2, 2 * W + 3 * H + 1))
+      : style === '601'
+        ? Math.max(L + 2 * H + 2.4, W + 2 * H + 1) // body cross + end panels lying beside
+        : style === '933'
+          ? Math.max(L + 3 * H + 2.5, W + 2 * H + 1.5) // strips spread out flat
+          : Math.max(L + 2 * H + 2, 2 * W + 3 * H + 1))
     : style === '711'
       ? Math.max(L + W + 1, H + 2 * W * 0.62 + 1) // flat-folded glued stack
       : Math.max(2 * L + 2 * W + 1.2, H + 2 * majDFit + 0.5) + (isScope ? (W + 2) : 0);
@@ -983,7 +1088,11 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   const foldedExtent = bottomAnchored
     ? (style === '501'
       ? Math.max(L * 1.45, W, H) + 1 // tray pulled partway out of the sleeve
-      : Math.max(L, W, H + W * 0.8) + 1.2)
+      : style === '601'
+        ? Math.max(L + 2.2, W, H) + 0.5 // end panels approach from both sides
+        : style === '933'
+          ? Math.max(L, W, 2.8 * H) + 0.8 // transverse strips hover before dropping
+          : Math.max(L, W, H + W * 0.8) + 1.2)
     : Math.max(L, W, H / 2 + topOpenFit + depthBelow) + (isScope ? 1.5 : 0);
   // The 0501 sleeve only reaches the tray late in the fold, so its camera
   // blend follows the sleeve's travel instead of the wall stage.
@@ -1016,7 +1125,10 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
     // span the full slider range.
     if (style === '421') return <MailerBox L={L} W={W} H={H} p={foldP * 0.6} tex={texForBox} printCoverageSide={coverSide} withLid={false} />;
     if (style === '410') return <WrapBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} />;
+    if (style === '401') return <WrapBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} folder />;
     if (style === '501') return <SleeveBox L={L} W={W} H={H} p={foldP} tex={texForBox} lidTex={lidTexSet} printCoverageSide={coverSide} />;
+    if (style === '601') return <BlissBox L={L} W={W} H={H} p={foldP} tex={texForBox} lidTex={lidTexSet} printCoverageSide={coverSide} />;
+    if (style === '933') return <PartitionGrid L={L} W={W} H={H} p={foldP} tex={texForBox} />;
     if (style === '711') return <CrashLockBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageBack={coverBack} printCoverageSide={coverSide} />;
     return <SlottedBox L={L} W={W} H={H} style={style} p={foldP} tex={texForBox} lidTex={lidTexSet} printCoverageBack={coverBack} printCoverageSide={coverSide} withHandles={dieCutting && !isScope} gluing={gluing} stapling={stapling} />;
   };

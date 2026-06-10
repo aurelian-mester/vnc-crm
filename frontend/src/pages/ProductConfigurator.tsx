@@ -25,9 +25,9 @@ interface PricingResult {
   tiers: PriceTier[];
 }
 
-// FEFCO styles made of two separate pieces (tray + telescopic lid / sleeve),
-// where the lid piece can be ordered in a different board grade.
-const TWO_PIECE_STYLES = ['300', '301', '501'];
+// FEFCO styles made of multiple pieces (telescopic lid, sleeve, bliss end
+// panels), where the secondary piece can be ordered in a different board grade.
+const TWO_PIECE_STYLES = ['300', '301', '302', '501', '601'];
 
 interface SpecsResult {
   caliper: number;
@@ -1618,12 +1618,16 @@ const ProductConfigurator: React.FC = () => {
               <option value="203">FEFCO 203 (Fully Overlapping Flaps)</option>
               <option value="204">FEFCO 204 (Centre Special Slotted)</option>
               <option value="300">FEFCO 300 (Telescopic Lid & Tray)</option>
-              <option value="301">FEFCO 301 (Full Telescope Box)</option>
+              <option value="301">FEFCO 301 (Partial Telescope Box)</option>
+              <option value="302">FEFCO 302 (Full Telescope, Equal Halves)</option>
+              <option value="401">FEFCO 401 (One-Piece Book Wrap)</option>
               <option value="427">FEFCO 427 (Die-Cut Mailer)</option>
               <option value="410">FEFCO 410 (Wrap-Around Folder)</option>
               <option value="421">FEFCO 421 (Die-Cut Four-Corner Tray)</option>
               <option value="501">FEFCO 501 (Slide Box: Sleeve & Tray)</option>
+              <option value="601">FEFCO 601 (Bliss Box: Body + End Panels)</option>
               <option value="711">FEFCO 711 (Crash-Lock Bottom)</option>
+              <option value="933">FEFCO 933 (Partition / Divider Insert)</option>
             </select>
           </div>
 
@@ -1640,7 +1644,7 @@ const ProductConfigurator: React.FC = () => {
           {TWO_PIECE_STYLES.includes(params.fefco_code) && (
             <div style={{ marginTop: '15px' }}>
               <label style={{ fontSize: '0.8rem', color: '#666' }}>
-                {locale === 'ro' ? 'Material Capac / Manșon' : 'Lid / Sleeve Material'}
+                {locale === 'ro' ? 'Material Capac / Manșon / Capete' : 'Lid / Sleeve / End-Panel Material'}
               </label>
               <select value={params.lid_material} onChange={e => setParams({...params, lid_material: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
                 <option value="">{locale === 'ro' ? 'Același ca și corpul' : 'Same as body'}</option>

@@ -401,11 +401,16 @@ func lidAreaSQM(fefco string, length, width, height float64) float64 {
 			rim = 40
 		}
 		return (length*width + 2*rim*(length+width)) / 1000000.0
-	case "301": // full telescope: lid is nearly a second box shell
-		rim := 0.96 * height
+	case "301": // partial telescope: lid covers ~60% of the body height
+		rim := 0.62 * height
+		return (length*width + 2*rim*(length+width)) / 1000000.0
+	case "302": // full telescope of two equal halves: lid is a second shell
+		rim := 0.97 * height
 		return (length*width + 2*rim*(length+width)) / 1000000.0
 	case "501": // slide box: outer sleeve is a four-panel tube
 		return 2 * length * (width + height) / 1000000.0
+	case "601": // bliss box: two glued end panels
+		return 2 * width * height / 1000000.0
 	}
 	return 0
 }
@@ -417,6 +422,11 @@ func calculatePricingDetails(req CalculationRequest, q int) (materialPrice, setu
 
 	// Surface Area in square meters (approx for a box: 2*(L*W + L*H + W*H))
 	surfaceArea := 2 * (req.Length*req.Width + req.Length*req.Height + req.Width*req.Height) / 1000000.0
+	// A partition insert (FEFCO 0933) has no walls — its board is just the
+	// crossed strips (2 longitudinal + 3 transverse, matching the 3D model).
+	if strings.TrimPrefix(strings.TrimSpace(req.FefcoCode), "0") == "933" {
+		surfaceArea = (2*req.Length*req.Height + 3*req.Width*req.Height) / 1000000.0
+	}
 
 	materialPricePerSQM := resolveBoardRate(req.Material, req.CustomerID, req.CustomerPriceGroup, q)
 
