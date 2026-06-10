@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ var (
 	clientID     = "780afb7e-5e51-4528-b7e7-2502793984dc"
 	clientSecret string
 	redirectURL  = os.Getenv("OAUTH_REDIRECT_URL")
+	appBasePath  = "/vnc-crm" // post-login SPA base path, derived from redirectURL
 	jwtKey       []byte
 	dwhURL       string
 	db           *sql.DB
@@ -50,6 +52,13 @@ func init() {
 	dwhURL = mustEnv("DWH_DATABASE_URL")
 	if redirectURL == "" {
 		redirectURL = "https://192.168.72.20/vnc-crm/api/auth/callback"
+	}
+	// The SPA lives at the redirect URL's path minus the API callback suffix,
+	// so each instance (/vnc-crm, /vnc-crm-app) returns users to its own app.
+	if u, err := url.Parse(redirectURL); err == nil {
+		if p := strings.TrimSuffix(u.Path, "/api/auth/callback"); p != "" && p != u.Path {
+			appBasePath = p
+		}
 	}
 	oauthConfig = &oauth2.Config{
 		ClientID:     clientID,
@@ -627,8 +636,9 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Redirect back to frontend with token
-	http.Redirect(w, r, "/vnc-crm/?token="+tokenString, http.StatusSeeOther)
+	// Redirect back to the SPA this auth instance serves (not a hardcoded
+	// path — a /vnc-crm-app login must land back on /vnc-crm-app).
+	http.Redirect(w, r, appBasePath+"/?token="+tokenString, http.StatusSeeOther)
 }
 
 func claimsFromToken(r *http.Request) (jwt.MapClaims, error) {
