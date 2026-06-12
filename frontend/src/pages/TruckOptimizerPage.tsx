@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useI18n } from '../i18n';
 import { parseJWT } from '../App';
 import TruckVisualizer3D from '../components/TruckVisualizer3D';
+import { HANDOFF_KEY } from '../boxLogistics';
 
 interface PalletPreset {
   id: number;
@@ -123,6 +124,36 @@ const TruckOptimizerPage: React.FC = () => {
     fetchPresets();
     fetchLoadPlans();
   }, [token]);
+
+  // Pick up pallets handed over from the Configurator / Quotes pages.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(HANDOFF_KEY);
+      if (!raw) return;
+      localStorage.removeItem(HANDOFF_KEY);
+      const items = JSON.parse(raw);
+      if (!Array.isArray(items) || items.length === 0) return;
+      setQueue(prev => [
+        ...prev,
+        ...items.map((it: any, i: number) => ({
+          id: 'H-' + Math.random().toString(36).substr(2, 9).toUpperCase(),
+          name: String(it.name || 'Import'),
+          length: Number(it.length) || 1200,
+          width: Number(it.width) || 800,
+          height: Number(it.height) || 1000,
+          weight: Number(it.weight) || 0,
+          quantity: Number(it.quantity) || 1,
+          stackable: !!it.stackable,
+          color: colorList[(prev.length + i) % colorList.length],
+          destination: String(it.destination || ''),
+          sequence: Number(it.sequence) || 1,
+        })),
+      ]);
+    } catch (err) {
+      console.error('Optimizer handoff import failed', err);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchPresets = async () => {
     try {

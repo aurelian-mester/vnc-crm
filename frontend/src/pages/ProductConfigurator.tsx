@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import BoxConfigurator3D from '../components/BoxConfigurator3D';
 import { parseJWT } from '../App';
 import { useI18n } from '../i18n';
+import { planPallets, planToHandoffItems, pushHandoff, DEFAULT_PALLET, PalletConstraints } from '../boxLogistics';
 
 interface PriceTier {
   quantity: number;
@@ -104,6 +105,16 @@ const ProductConfigurator: React.FC = () => {
     : '';
 
   const [result, setResult] = useState<PricingResult | null>(null);
+
+  // Hand-off to the Truck Load Optimizer
+  const [showShipModal, setShowShipModal] = useState(false);
+  const [shipMode, setShipMode] = useState<'flat' | 'erected'>('flat');
+  const [shipMaxStack, setShipMaxStack] = useState(1800);
+  const [shipDest, setShipDest] = useState('');
+  const [shipSeq, setShipSeq] = useState(1);
+  const [shipPallets, setShipPallets] = useState<any[]>([]);
+  const [shipPalletId, setShipPalletId] = useState<string>('');
+
   const [margins, setMargins] = useState<any[]>([]);
   const [specs, setSpecs] = useState<SpecsResult | null>(null);
   const [loadingSpecs, setLoadingSpecs] = useState(false);
@@ -1697,6 +1708,24 @@ const ProductConfigurator: React.FC = () => {
             </label>
           </div>
 
+          <button
+            type="button"
+            onClick={() => {
+              setShipDest(customers.find(c => c.id === selectedCustomerId)?.name || '');
+              if (shipPallets.length === 0) {
+                const token2 = localStorage.getItem('vnc_token');
+                fetch('/vnc-crm/api/logistics/presets', { headers: { 'Authorization': `Bearer ${token2}` } })
+                  .then(res => (res.ok ? res.json() : null))
+                  .then(data => { if (data?.pallets) setShipPallets(data.pallets); })
+                  .catch(() => {});
+              }
+              setShowShipModal(true);
+            }}
+            style={{ marginTop: '15px', width: '100%', padding: '10px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}
+          >
+            🚚 {locale === 'ro' ? 'Trimite în Optimizatorul de Încărcare' : 'Send to Truck Load Optimizer'}
+          </button>
+
           {params.printing && (
             <div style={{
               marginTop: '15px',
@@ -2064,6 +2093,96 @@ const ProductConfigurator: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Hand-off to the Truck Load Optimizer */}
+      {showShipModal && (() => {
+        const preset = shipPallets.find(pp => pp.id?.toString() === shipPalletId);
+        const constraints: PalletConstraints = {
+          ...DEFAULT_PALLET,
+          palletLengthMm: preset?.length_mm || DEFAULT_PALLET.palletLengthMm,
+          palletWidthMm: preset?.width_mm || DEFAULT_PALLET.palletWidthMm,
+          palletTareKg: preset?.tare_weight_kg || DEFAULT_PALLET.palletTareKg,
+          maxStackMm: shipMaxStack,
+        };
+        const boxSpec = {
+          lengthMm: params.length, widthMm: params.width, heightMm: params.height,
+          fefco: params.fefco_code, fluteType: params.flute_type, quantity: params.quantity,
+          grammage: specs?.grammage, caliperMm: specs?.caliper,
+        };
+        const plan = planPallets(boxSpec, shipMode, constraints);
+        return (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+            <div style={{ background: 'white', borderRadius: '12px', padding: '24px', width: '460px', maxWidth: '92vw', boxShadow: '0 10px 40px rgba(0,0,0,0.25)' }}>
+              <h3 style={{ margin: '0 0 14px 0', color: 'var(--secondary-color)' }}>
+                🚚 {locale === 'ro' ? 'Trimite în Optimizatorul de Încărcare' : 'Send to Truck Load Optimizer'}
+              </h3>
+
+              <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
+                {(['flat', 'erected'] as const).map(m => (
+                  <button key={m} type="button" onClick={() => setShipMode(m)}
+                    style={{ flex: 1, padding: '8px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', border: '1px solid #16a34a', backgroundColor: shipMode === m ? '#16a34a' : '#f0fdf4', color: shipMode === m ? 'white' : '#166534' }}>
+                    {m === 'flat' ? (locale === 'ro' ? '📦 Pliate (bax)' : '📦 Flat-packed') : (locale === 'ro' ? '🧊 Formate' : '🧊 Erected')}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: '#666' }}>{locale === 'ro' ? 'Palet' : 'Pallet'}</label>
+                  <select value={shipPalletId} onChange={e => setShipPalletId(e.target.value)} style={{ width: '100%', padding: '7px', border: '1px solid #ddd', borderRadius: '4px' }}>
+                    <option value="">EUR 1200×800 (implicit)</option>
+                    {shipPallets.map(pp => <option key={pp.id} value={pp.id}>{pp.name} ({pp.length_mm}×{pp.width_mm})</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: '#666' }}>{locale === 'ro' ? 'Înălțime max. (mm)' : 'Max height (mm)'}</label>
+                  <input type="number" min={500} value={shipMaxStack} onChange={e => setShipMaxStack(Math.max(500, Number(e.target.value)))} style={{ width: '100%', padding: '7px', border: '1px solid #ddd', borderRadius: '4px', boxSizing: 'border-box' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: '#666' }}>{locale === 'ro' ? 'Destinație / Client' : 'Destination / Customer'}</label>
+                  <input type="text" value={shipDest} onChange={e => setShipDest(e.target.value)} style={{ width: '100%', padding: '7px', border: '1px solid #ddd', borderRadius: '4px', boxSizing: 'border-box' }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: '#666' }}>{locale === 'ro' ? 'Oprire livrare #' : 'Drop #'}</label>
+                  <input type="number" min={1} value={shipSeq} onChange={e => setShipSeq(Math.max(1, Number(e.target.value)))} style={{ width: '100%', padding: '7px', border: '1px solid #ddd', borderRadius: '4px', boxSizing: 'border-box' }} />
+                </div>
+              </div>
+
+              <div style={{ padding: '12px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', fontSize: '0.85rem', marginBottom: '14px' }}>
+                {plan.totalPallets > 0 ? (
+                  <>
+                    <div><strong>{params.quantity}</strong> {locale === 'ro' ? 'cutii' : 'boxes'} → <strong>{plan.totalPallets}</strong> {locale === 'ro' ? 'paleți' : 'pallets'}</div>
+                    {plan.groups.map((g, i) => (
+                      <div key={i} style={{ color: '#166534' }}>
+                        {g.palletCount} × {g.boxesPerPallet} {locale === 'ro' ? 'buc/palet' : 'pcs/pallet'} · {g.heightMm} mm · {g.weightKg} kg
+                      </div>
+                    ))}
+                    {plan.warnings.includes('flat_forced') && <div style={{ color: '#b45309' }}>⚠ {locale === 'ro' ? 'Acest produs se livrează doar plat.' : 'This product ships flat only.'}</div>}
+                    {plan.warnings.includes('overhang') && <div style={{ color: '#b45309' }}>⚠ {locale === 'ro' ? 'Semifabricatul depășește paletul (overhang).' : 'Blank overhangs the pallet.'}</div>}
+                  </>
+                ) : (
+                  <div style={{ color: '#b91c1c' }}>{locale === 'ro' ? 'Nu încape pe paletul ales — mărește înălțimea maximă.' : 'Does not fit the chosen pallet — raise the max height.'}</div>
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                <button type="button" onClick={() => setShowShipModal(false)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #ddd', background: 'white', cursor: 'pointer' }}>
+                  {t('cancel')}
+                </button>
+                <button type="button" disabled={plan.totalPallets === 0}
+                  onClick={() => {
+                    pushHandoff(planToHandoffItems(plan, boxSpec, shipMode, shipDest, shipSeq, constraints));
+                    setShowShipModal(false);
+                    window.location.href = '/vnc-crm/crm/truck-optimizer';
+                  }}
+                  style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', background: plan.totalPallets === 0 ? '#cbd5e0' : '#16a34a', color: 'white', fontWeight: 'bold', cursor: plan.totalPallets === 0 ? 'not-allowed' : 'pointer' }}>
+                  {locale === 'ro' ? 'Trimite' : 'Send'} ({plan.totalPallets})
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

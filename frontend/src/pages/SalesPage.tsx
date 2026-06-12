@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import QuoteModal from '../components/QuoteModal';
 import { useI18n } from '../i18n';
+import { planPallets, planToHandoffItems, pushHandoff, DEFAULT_PALLET, HandoffItem } from '../boxLogistics';
 
 interface Quote {
   id: number;
@@ -20,7 +21,7 @@ const SalesPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedQuoteId, setSelectedQuoteId] = useState<number | null>(null);
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
 
   const fetchQuotes = () => {
     setLoading(true);
@@ -81,6 +82,44 @@ const SalesPage: React.FC = () => {
         setQuotes(quotes.map(q => q.id === id ? { ...q, status: newStatus } : q));
       })
       .catch(err => console.error('Failed to update quote status', err));
+  };
+
+  // Send a quote's custom-box lines to the Truck Load Optimizer as pallets
+  // (flat-packed bundles on EUR pallets — the standard way boxes ship).
+  const handleSendToOptimizer = (id: number, customerName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const token = localStorage.getItem('vnc_token');
+    fetch(`/vnc-crm/api/quotes/${id}`, { headers: { 'Authorization': `Bearer ${token}` } })
+      .then(res => (res.ok ? res.json() : Promise.reject(new Error('quote fetch failed'))))
+      .then(q => {
+        const items: HandoffItem[] = [];
+        let skipped = 0;
+        (q.items || []).forEach((it: any) => {
+          let cfg: any = null;
+          try { cfg = it.config_params ? JSON.parse(it.config_params) : null; } catch { cfg = null; }
+          if (!cfg || !cfg.length || !cfg.width || !cfg.height) { skipped++; return; }
+          const box = {
+            lengthMm: Number(cfg.length), widthMm: Number(cfg.width), heightMm: Number(cfg.height),
+            fefco: String(cfg.fefco_code || '201'), fluteType: String(cfg.flute_type || 'B'),
+            quantity: Number(it.quantity) || 0,
+          };
+          if (box.quantity <= 0) { skipped++; return; }
+          const plan = planPallets(box, 'flat', DEFAULT_PALLET);
+          items.push(...planToHandoffItems(plan, box, 'flat', customerName, 1, DEFAULT_PALLET, `#Q${id} `));
+        });
+        if (items.length === 0) {
+          alert(locale === 'ro' ? 'Oferta nu are linii de cutii configurate.' : 'This quote has no configured box lines.');
+          return;
+        }
+        const totalPallets = items.reduce((a, i) => a + i.quantity, 0);
+        const msg = locale === 'ro'
+          ? `${totalPallets} paleți → Optimizatorul de Încărcare${skipped > 0 ? ` (${skipped} linii standard sărite)` : ''}. Continui?`
+          : `${totalPallets} pallets → Truck Load Optimizer${skipped > 0 ? ` (${skipped} standard lines skipped)` : ''}. Continue?`;
+        if (!window.confirm(msg)) return;
+        pushHandoff(items);
+        window.location.href = '/vnc-crm/crm/truck-optimizer';
+      })
+      .catch(err => console.error('Send to optimizer failed', err));
   };
 
   // Metrics Calculations
@@ -281,7 +320,14 @@ const SalesPage: React.FC = () => {
                             </button>
                           </>
                         )}
-                        <button 
+                        <button
+                          onClick={(e) => handleSendToOptimizer(q.id, q.customer_name, e)}
+                          title="Truck Load Optimizer"
+                          style={{ padding: '4px 8px', fontSize: '0.75rem', backgroundColor: '#f0fdf4', border: '1px solid #86efac', color: '#16a34a', borderRadius: '4px', cursor: 'pointer' }}
+                        >
+                          🚚
+                        </button>
+                        <button
                           onClick={(e) => handleDelete(q.id, e)}
                           style={{ padding: '4px 8px', fontSize: '0.75rem', backgroundColor: '#fff2f0', border: '1px solid #ffa39e', color: '#f5222d', borderRadius: '4px', cursor: 'pointer' }}
                         >
