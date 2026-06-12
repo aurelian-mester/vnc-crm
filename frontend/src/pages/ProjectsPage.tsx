@@ -47,7 +47,7 @@ const ProjectsPage: React.FC = () => {
     fetch('/vnc-crm/api/projects', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setProjects(data || []))
       .catch(err => console.error('Failed to load projects', err));
 
@@ -55,7 +55,7 @@ const ProjectsPage: React.FC = () => {
     fetch('/vnc-crm/api/customers', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setCustomers(data || []))
       .catch(err => console.error('Failed to load customers', err));
 
@@ -63,7 +63,7 @@ const ProjectsPage: React.FC = () => {
     fetch('/vnc-crm/api/opportunities', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         setOpportunities(data || []);
         setLoading(false);
@@ -90,7 +90,7 @@ const ProjectsPage: React.FC = () => {
       },
       body: JSON.stringify(newProject)
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(() => {
         setShowAddModal(false);
         setNewProject({ customer_id: '', name: '', status: 'Planning', opportunity_id: null, delivery_date: '' });

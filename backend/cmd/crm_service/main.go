@@ -1720,13 +1720,21 @@ func handleDeleteBoxConfig(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateLead(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if _, ok := authorize(w, r, salesRoles); !ok {
+	claims, ok := authorize(w, r, salesRoles)
+	if !ok {
 		return
 	}
 	var req Lead
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
 		return
+	}
+	// Non-manager sales users always own the records they create; only
+	// managerRoles may assign a record to another salesperson.
+	if !managerRoles[claimStr(claims, "role")] {
+		if sc := claimStr(claims, "salesperson_code"); sc != "" {
+			req.SalespersonCode = sc
+		}
 	}
 	if db == nil {
 		http.Error(w, "Database unavailable", http.StatusInternalServerError)
@@ -1815,13 +1823,21 @@ func handleGetOpportunities(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateOpportunity(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	if _, ok := authorize(w, r, salesRoles); !ok {
+	claims, ok := authorize(w, r, salesRoles)
+	if !ok {
 		return
 	}
 	var req Opportunity
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
 		return
+	}
+	// Non-manager sales users always own the records they create; only
+	// managerRoles may assign a record to another salesperson.
+	if !managerRoles[claimStr(claims, "role")] {
+		if sc := claimStr(claims, "salesperson_code"); sc != "" {
+			req.SalespersonCode = sc
+		}
 	}
 	if db == nil {
 		http.Error(w, "Database unavailable", http.StatusInternalServerError)

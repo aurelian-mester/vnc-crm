@@ -31,7 +31,7 @@ const SalesPage: React.FC = () => {
         'Authorization': `Bearer ${token}`
       }
     })
-      .then((res) => res.json())
+      .then((res) => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then((data) => {
         setQuotes(data || []);
         setLoading(false);
@@ -57,7 +57,7 @@ const SalesPage: React.FC = () => {
         'Authorization': `Bearer ${token}`
       }
     })
-      .then((res) => res.json())
+      .then((res) => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then((data) => {
         if (data.status === 'success') {
           setQuotes(quotes.filter(q => q.id !== id));
@@ -77,7 +77,7 @@ const SalesPage: React.FC = () => {
       },
       body: JSON.stringify({ status: newStatus })
     })
-      .then((res) => res.json())
+      .then((res) => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(() => {
         setQuotes(quotes.map(q => q.id === id ? { ...q, status: newStatus } : q));
       })

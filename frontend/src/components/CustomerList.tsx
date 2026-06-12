@@ -73,7 +73,7 @@ const CustomerList: React.FC<CustomerListProps> = ({ onSelectCustomer }) => {
         'Authorization': `Bearer ${token}`
       }
     })
-      .then((res) => res.json())
+      .then((res) => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then((data) => {
         setCustomers(data || []);
         setLoading(false);

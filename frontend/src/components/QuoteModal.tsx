@@ -111,7 +111,7 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
     fetch(`/vnc-crm/api/quotes/${quoteId}/versions`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         setVersions(data || []);
         setLoadingVersions(false);
@@ -128,7 +128,7 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
     fetch(`/vnc-crm/api/quotes/${quoteId}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then((q) => {
         setSelectedCustomerId(q.customer_id);
         setStatus(q.status);
@@ -181,7 +181,7 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(() => {
         fetchQuoteDetails();
       })
@@ -200,7 +200,7 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
     fetch('/vnc-crm/api/auth/margins', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(marginsData => {
         setRoleMargins(marginsData || []);
       })
@@ -210,7 +210,7 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
     fetch('/vnc-crm/api/products?category=board_grades', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(materialsData => {
         setMaterialsList(materialsData || []);
       })
@@ -220,7 +220,7 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
     fetch('/vnc-crm/api/customers', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(customersData => {
         setCustomers(customersData || []);
         
@@ -248,7 +248,7 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
     fetch(`/vnc-crm/api/products?customer_id=${selectedCustomerId}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         setProductsList(data || []);
         setLoading(false);
@@ -328,7 +328,7 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
           length: 0, width: 0, height: 0
         })
       })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         updated[index].unit_price = data.unitPrice || prod.unit_price;
         setItems(updated);
@@ -367,7 +367,7 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
         customer_id: selectedCustomerId
       })
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         const updated = [...items];
         updated[index].unit_price = data.unitPrice || 0;
@@ -496,7 +496,7 @@ const QuoteModal: React.FC<QuoteModalProps> = ({ quoteId, preselectedCustomerId,
       },
       body: JSON.stringify(payload)
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(() => {
         setSubmitting(false);
         onSave();

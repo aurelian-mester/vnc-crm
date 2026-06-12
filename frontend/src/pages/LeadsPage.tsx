@@ -34,7 +34,7 @@ const LeadsPage: React.FC = () => {
     fetch('/vnc-crm/api/leads', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         setLeads(data || []);
         setLoading(false);
@@ -61,7 +61,7 @@ const LeadsPage: React.FC = () => {
       },
       body: JSON.stringify(newLead)
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(() => {
         setShowAddModal(false);
         setNewLead({ name: '', company: '', email: '', phone: '', status: 'New', salesperson_code: 'AM' });

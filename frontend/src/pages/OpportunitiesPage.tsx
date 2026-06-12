@@ -49,7 +49,7 @@ const OpportunitiesPage: React.FC = () => {
     fetch('/vnc-crm/api/opportunities', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setOpportunities(data || []))
       .catch(err => console.error('Failed to load opportunities', err));
 
@@ -57,7 +57,7 @@ const OpportunitiesPage: React.FC = () => {
     fetch('/vnc-crm/api/customers', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setCustomers(data || []))
       .catch(err => console.error('Failed to load customers', err));
 
@@ -65,7 +65,7 @@ const OpportunitiesPage: React.FC = () => {
     fetch('/vnc-crm/api/quotes', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         setQuotes(data || []);
         setLoading(false);
@@ -92,7 +92,7 @@ const OpportunitiesPage: React.FC = () => {
       },
       body: JSON.stringify(newOpp)
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(() => {
         setShowAddModal(false);
         setNewOpp({ customer_id: '', title: '', stage: 'Qualification', expected_value: 0, quote_id: null, salesperson_code: 'AM' });

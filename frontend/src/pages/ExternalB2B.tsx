@@ -146,7 +146,7 @@ const ExternalB2B: React.FC = () => {
     fetch(`/vnc-crm/api/customers/${customerID}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setCustomer(data))
       .catch(err => console.error('Failed to load B2B customer profile', err));
 
@@ -154,7 +154,7 @@ const ExternalB2B: React.FC = () => {
     fetch(`/vnc-crm/api/customers/${customerID}/quotes`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setQuotes(data || []))
       .catch(err => console.error('Failed to load customer quotes history', err));
 
@@ -162,7 +162,7 @@ const ExternalB2B: React.FC = () => {
     fetch(`/vnc-crm/api/production/jobs?customer_id=${customerID}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         setJobs(data || []);
       })
@@ -174,7 +174,7 @@ const ExternalB2B: React.FC = () => {
     fetch('/vnc-crm/api/claims', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setClaimsList(data || []))
       .catch(err => console.error('Failed to load customer claims', err));
 
@@ -182,7 +182,7 @@ const ExternalB2B: React.FC = () => {
     fetch('/vnc-crm/api/lab-tests', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         setLabTests(data || []);
         setLoading(false);
@@ -223,7 +223,7 @@ const ExternalB2B: React.FC = () => {
         },
         body: JSON.stringify(payload)
       })
-        .then(res => res.json())
+        .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
         .then(data => setPriceResult(data))
         .catch(err => console.error('B2B calculation failed', err));
     }
@@ -266,7 +266,7 @@ const ExternalB2B: React.FC = () => {
       },
       body: JSON.stringify(payload)
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(() => {
         alert(t('b2b_quote_success_alert'));
         setSubmittingQuote(false);
@@ -284,7 +284,7 @@ const ExternalB2B: React.FC = () => {
     fetch(`/vnc-crm/api/quotes/${qId}`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         setSelectedQuote(data);
         setViewingQuoteDetails(true);

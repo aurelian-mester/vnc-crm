@@ -53,7 +53,7 @@ const CustomerDetail: React.FC<CustomerDetailProps> = ({ customer, onBack }) => 
       fetch(`/vnc-crm/api/customers/${customer.id}/metrics`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
-        .then(res => res.json())
+        .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
         .then(data => {
           setMetrics(data);
           setLoadingMetrics(false);
@@ -71,7 +71,7 @@ const CustomerDetail: React.FC<CustomerDetailProps> = ({ customer, onBack }) => 
     fetch(`/vnc-crm/api/customers/${customer.id}/quotes`, {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         setQuotes(data || []);
         setLoadingQuotes(false);
@@ -94,7 +94,7 @@ const CustomerDetail: React.FC<CustomerDetailProps> = ({ customer, onBack }) => 
       fetch('/vnc-crm/api/claims', {
         headers: { 'Authorization': `Bearer ${token}` }
       })
-        .then(res => res.json())
+        .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
         .then(data => {
           const filtered = (data || []).filter((c: any) => c.customer_id === customer.id);
           setCustomerClaims(filtered);

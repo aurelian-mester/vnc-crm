@@ -36,7 +36,7 @@ const ProductionBoard: React.FC = () => {
     fetch('/vnc-crm/api/customers', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setCustomers(data || []))
       .catch(err => console.error('Failed to load customers list', err));
   }, []);

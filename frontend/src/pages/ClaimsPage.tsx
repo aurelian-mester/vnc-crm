@@ -87,7 +87,7 @@ const ClaimsPage: React.FC = () => {
     fetch('/vnc-crm/api/claims', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setClaims(data || []))
       .catch(err => console.error('Failed to load claims', err));
   };
@@ -96,7 +96,7 @@ const ClaimsPage: React.FC = () => {
     fetch('/vnc-crm/api/lab-tests', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setLabTests(data || []))
       .catch(err => console.error('Failed to load lab tests', err));
   };
@@ -105,7 +105,7 @@ const ClaimsPage: React.FC = () => {
     fetch('/vnc-crm/api/quotes', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => setQuotes(data || []))
       .catch(err => console.error('Failed to load quotes', err));
   };
@@ -114,7 +114,7 @@ const ClaimsPage: React.FC = () => {
     fetch('/vnc-crm/api/quality-config', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         if (data && data.cobb_threshold) {
           setCobbThreshold(data.cobb_threshold);

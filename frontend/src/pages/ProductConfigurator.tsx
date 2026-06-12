@@ -484,7 +484,7 @@ const ProductConfigurator: React.FC = () => {
       },
       body: JSON.stringify({ ...params, lid_material: effectiveLidMaterial, target_margin: targetMargin })
     })
-    .then(res => res.json())
+    .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
     .then(data => setResult(data))
     .catch(err => console.error('Calculation failed', err));
   };
@@ -511,7 +511,7 @@ const ProductConfigurator: React.FC = () => {
         stapling: params.stapling
       })
     })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(data => {
         setSpecs(data);
         setLoadingSpecs(false);
@@ -529,7 +529,7 @@ const ProductConfigurator: React.FC = () => {
         'Authorization': `Bearer ${token}`
       }
     })
-    .then(res => res.json())
+    .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
     .then(data => setMargins(data || []))
     .catch(err => console.error('Failed to fetch margins config', err));
 
@@ -538,7 +538,7 @@ const ProductConfigurator: React.FC = () => {
         'Authorization': `Bearer ${token}`
       }
     })
-    .then(res => res.json())
+    .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
     .then(data => setCustomers(data || []))
     .catch(err => console.error('Failed to fetch customers', err));
 
