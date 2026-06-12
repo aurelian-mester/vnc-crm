@@ -4,6 +4,7 @@ import { parseJWT } from '../App';
 import { useI18n } from '../i18n';
 import { planPallets, planToHandoffItems, pushHandoff, DEFAULT_PALLET, PalletConstraints } from '../boxLogistics';
 import { buildDielineSVG } from '../dieline';
+import { BoardStructure, BoardStructurePicker, BoardCrossSection } from '../components/BoardStructurePicker';
 
 interface PriceTier {
   quantity: number;
@@ -91,6 +92,7 @@ const ProductConfigurator: React.FC = () => {
     discount: 0,
     fefco_code: '201',
     lid_material: '', // '' = same board as the body; only used by two-piece styles
+    structure_code: '', // DWH board structure (CO.STRUCTURI); drives flute/material
     flute_type: 'B',
     tooling_printing_plates_cost: 0,
     tooling_die_cut_molds_cost: 0,
@@ -106,6 +108,20 @@ const ProductConfigurator: React.FC = () => {
     : '';
 
   const [result, setResult] = useState<PricingResult | null>(null);
+
+  // Board structures (tipuri de carton) replicated from the DWH
+  const [structures, setStructures] = useState<BoardStructure[]>([]);
+  const selectedStructure = structures.find(s => s.code === params.structure_code) || null;
+
+  // Legacy pricing material derived from the structure's outer liner family,
+  // so the existing per-material tariffs keep working unchanged.
+  const materialForStructure = (s: BoardStructure): string => {
+    const outer = (s.papers || []).find(pp => !pp.fluting) || (s.papers || [])[0];
+    const code = outer?.code || '';
+    if (code.startsWith('SZ')) return 'Schrenz';
+    if (code.startsWith('SC') || code.startsWith('W')) return 'Wellenstoff';
+    return 'Testliner';
+  };
 
   // Hand-off to the Truck Load Optimizer
   const [showShipModal, setShowShipModal] = useState(false);
@@ -349,6 +365,15 @@ const ProductConfigurator: React.FC = () => {
                 <span class="spec-label">${locale === 'ro' ? 'Compoziție Material' : 'Material Grade'}:</span>
                 <span class="spec-val">${params.material}</span>
               </div>
+              ${selectedStructure ? `
+              <div class="spec-row">
+                <span class="spec-label">${locale === 'ro' ? 'Structură Carton' : 'Board Structure'}:</span>
+                <span class="spec-val">${selectedStructure.code} · ${selectedStructure.flute.trim()} · ${selectedStructure.color.trim()}</span>
+              </div>
+              <div class="spec-row">
+                <span class="spec-label">${locale === 'ro' ? 'Hârtii Componente' : 'Component Papers'}:</span>
+                <span class="spec-val">${(selectedStructure.papers || []).map(pp => `${pp.code} ${pp.name} ×${pp.qty.toFixed(2)}`).join(' + ') || '—'}${selectedStructure.total_grammage > 0 ? ` (~${Math.round(selectedStructure.total_grammage)} g/m²)` : ''}</span>
+              </div>` : ''}
               ${effectiveLidMaterial && effectiveLidMaterial !== params.material ? `
               <div class="spec-row">
                 <span class="spec-label">${locale === 'ro' ? 'Material Capac / Manșon' : 'Lid / Sleeve Material'}:</span>
@@ -542,6 +567,14 @@ const ProductConfigurator: React.FC = () => {
     .then(data => setCustomers(data || []))
     .catch(err => console.error('Failed to fetch customers', err));
 
+    // Board structures replicated from the DWH (synced server-side every 4 h)
+    fetch('/vnc-crm/api/pricing/structures', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
+    .then(data => setStructures(Array.isArray(data) ? data : []))
+    .catch(err => console.error('Failed to fetch board structures', err));
+
     fetchSavedConfigs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -710,7 +743,7 @@ const ProductConfigurator: React.FC = () => {
 
       return {
         product_id: customProductId,
-        description: `Custom Box FEFCO ${params.fefco_code} (${params.length}x${params.width}x${params.height} mm) ${params.material}${effectiveLidMaterial && effectiveLidMaterial !== params.material ? ` / ${locale === 'ro' ? 'capac' : 'lid'} ${effectiveLidMaterial}` : ''}`,
+        description: `Custom Box FEFCO ${params.fefco_code} (${params.length}x${params.width}x${params.height} mm) ${params.structure_code || params.material}${effectiveLidMaterial && effectiveLidMaterial !== params.material ? ` / ${locale === 'ro' ? 'capac' : 'lid'} ${effectiveLidMaterial}` : ''}`,
         quantity: qty,
         unit_price: price,
         config_params: JSON.stringify({
@@ -719,6 +752,7 @@ const ProductConfigurator: React.FC = () => {
           height: params.height,
           material: params.material,
           lid_material: effectiveLidMaterial,
+          structure_code: params.structure_code,
           fefco_code: params.fefco_code,
           flute_type: params.flute_type,
           printing: params.printing,
@@ -818,6 +852,7 @@ const ProductConfigurator: React.FC = () => {
                   foldPercent={foldPercent}
                   fefcoCode={params.fefco_code}
                   lidMaterial={effectiveLidMaterial || undefined}
+                  boardColor={selectedStructure?.color || undefined}
                   printColor={printColor}
                   printText={printText}
                   hasRecycling={printSymbols.recycling}
@@ -1679,6 +1714,34 @@ const ProductConfigurator: React.FC = () => {
             </select>
           </div>
 
+          {/* Board structure picker (DWH CO.STRUCTURI). Falls back to the
+              legacy Material+Flute selects if the structure list is empty. */}
+          {structures.length > 0 ? (
+            <div style={{ marginTop: '15px' }}>
+              <label style={{ fontSize: '0.8rem', color: '#666' }}>
+                {locale === 'ro' ? 'Structură Carton (DWH)' : 'Board Structure (DWH)'}
+              </label>
+              <BoardStructurePicker
+                structures={structures}
+                value={params.structure_code}
+                locale={locale}
+                onChange={s => setParams({
+                  ...params,
+                  structure_code: s.code,
+                  flute_type: s.flute.trim() || params.flute_type,
+                  material: materialForStructure(s),
+                })}
+              />
+              {selectedStructure && (
+                <div style={{ marginTop: '10px', padding: '10px', background: '#fcfbf8', border: '1px solid #eee8dc', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#8a6d3b', marginBottom: '6px' }}>
+                    {locale === 'ro' ? 'Secțiune transversală' : 'Cross-section'} — {selectedStructure.code} · {selectedStructure.color.trim()}
+                  </div>
+                  <BoardCrossSection s={selectedStructure} locale={locale} />
+                </div>
+              )}
+            </div>
+          ) : (
           <div style={{ marginTop: '15px' }}>
             <label style={{ fontSize: '0.8rem', color: '#666' }}>{t('material_grade')}</label>
             <select value={params.material} onChange={e => setParams({...params, material: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
@@ -1687,6 +1750,7 @@ const ProductConfigurator: React.FC = () => {
               <option value="Wellenstoff">Wellenstoff</option>
             </select>
           </div>
+          )}
 
           {/* Two-piece styles (tray + lid / sleeve) can use a different board for the lid */}
           {TWO_PIECE_STYLES.includes(params.fefco_code) && (
@@ -1703,6 +1767,7 @@ const ProductConfigurator: React.FC = () => {
             </div>
           )}
 
+          {structures.length === 0 && (
           <div style={{ marginTop: '15px' }}>
             <label style={{ fontSize: '0.8rem', color: '#666' }}>{t('flute_type_structure')}</label>
             <select value={params.flute_type} onChange={e => setParams({...params, flute_type: e.target.value})} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
@@ -1725,6 +1790,7 @@ const ProductConfigurator: React.FC = () => {
               </optgroup>
             </select>
           </div>
+          )}
 
           <div style={{ marginTop: '20px', display: 'flex', flexWrap: 'wrap', gap: '15px' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.9rem' }}>

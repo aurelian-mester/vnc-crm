@@ -8,7 +8,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -143,6 +145,15 @@ func main() {
 	jwtKey = []byte(mustEnv("JWT_SECRET"))
 	dwhURL = mustEnv("DWH_DATABASE_URL")
 	initDB()
+	ensureStructuresTable()
+
+	// Board structures replicate from the DWH at boot and refresh every 4 h.
+	go func() {
+		syncBoardStructures()
+		for range time.Tick(4 * time.Hour) {
+			syncBoardStructures()
+		}
+	}()
 
 	r := mux.NewRouter()
 
@@ -150,9 +161,204 @@ func main() {
 	r.HandleFunc("/products", handleGetProducts).Methods("GET")
 	r.HandleFunc("/pricing/specs", handleGetSpecs).Methods("POST")
 	r.HandleFunc("/pricing/custom-product", handleCustomProduct).Methods("POST")
+	r.HandleFunc("/pricing/structures", handleGetStructures).Methods("GET")
 
 	log.Println("Pricing Service starting on :8083...")
 	log.Fatal(http.ListenAndServe(":8083", r))
+}
+
+// ---------------------------------------------------------------------------
+// Board structures (tipuri de carton) replicated from the DWH.
+// Source: ss01.item_mv (category CO.STRUCTURI) for code/type/flute/colour and
+// ss01.productionbomline_v for the component papers — the BOM lines measured
+// in MP (m² of paper per 1000 m² of board; fluted layers carry the ~1.4-1.5
+// take-up factor).
+// ---------------------------------------------------------------------------
+
+type StructPaper struct {
+	Code     string  `json:"code"`     // e.g. K170
+	Name     string  `json:"name"`     // e.g. Kraftliner
+	Grammage float64 `json:"grammage"` // g/m² parsed from the code
+	Qty      float64 `json:"qty"`      // m² of paper per m² of board
+	Fluting  bool    `json:"fluting"`
+}
+
+// Paper family names per the DWH hartiedetails catalogue.
+var paperFamilies = map[string]struct {
+	name    string
+	fluting bool
+}{
+	"K":   {"Kraftliner", false},
+	"KA":  {"Kraft albit", false},
+	"KAL": {"Kraft alb lux", false},
+	"T":   {"Testliner", false},
+	"TA":  {"Testliner alb", false},
+	"TAC": {"Testliner alb lux", false},
+	"SC":  {"Semichimică", true},
+	"SZ":  {"Schrenz", true},
+	"W":   {"Wellenstoff", true},
+}
+
+var paperCodeRe = regexp.MustCompile(`^([A-Za-z]+)(\d+)$`)
+
+func ensureStructuresTable() {
+	if db == nil {
+		return
+	}
+	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS board_structures (
+		code TEXT PRIMARY KEY,
+		description TEXT,
+		tip_carton TEXT,
+		flute TEXT,
+		color TEXT,
+		papers JSONB,
+		total_grammage REAL,
+		synced_at TIMESTAMPTZ
+	)`)
+	if err != nil {
+		log.Printf("board_structures table: %v", err)
+	}
+}
+
+func syncBoardStructures() {
+	if db == nil {
+		return
+	}
+	dwhDB, err := sql.Open("postgres", dwhURL)
+	if err != nil {
+		log.Printf("structures sync: dwh open failed: %v", err)
+		return
+	}
+	defer dwhDB.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	type structRow struct {
+		desc, tip, flute, color string
+		papers                  []StructPaper
+	}
+	structs := map[string]*structRow{}
+
+	rows, err := dwhDB.QueryContext(ctx, `
+		SELECT i."No.", COALESCE(i."Description",''), COALESCE(i."Tip Carton CCO",''),
+		       COALESCE(i."Tip Ondula CCO",''), COALESCE(i."Culoare CCO",'')
+		FROM ss01.item_mv i
+		WHERE i."Item Category Code" = 'CO.STRUCTURI'`)
+	if err != nil {
+		log.Printf("structures sync: query failed: %v", err)
+		return
+	}
+	for rows.Next() {
+		var code string
+		sr := &structRow{}
+		if err := rows.Scan(&code, &sr.desc, &sr.tip, &sr.flute, &sr.color); err == nil && code != "" {
+			structs[strings.TrimSpace(code)] = sr
+		}
+	}
+	rows.Close()
+
+	prows, err := dwhDB.QueryContext(ctx, `
+		SELECT b."Production BOM No.", b."No.", b."Quantity"
+		FROM ss01.productionbomline_v b
+		JOIN ss01.item_mv i ON i."No." = b."Production BOM No."
+		WHERE i."Item Category Code" = 'CO.STRUCTURI'
+		  AND b."Unit of Measure Code" = 'MP'
+		ORDER BY b."Production BOM No.", b."Line No."`)
+	if err != nil {
+		log.Printf("structures sync: bom query failed: %v", err)
+		return
+	}
+	for prows.Next() {
+		var bom, paper string
+		var qty float64
+		if err := prows.Scan(&bom, &paper, &qty); err != nil {
+			continue
+		}
+		sr, ok := structs[strings.TrimSpace(bom)]
+		if !ok {
+			continue
+		}
+		paper = strings.ToUpper(strings.TrimSpace(paper))
+		p := StructPaper{Code: paper, Qty: qty / 1000.0}
+		if m := paperCodeRe.FindStringSubmatch(paper); m != nil {
+			if fam, ok := paperFamilies[m[1]]; ok {
+				p.Name = fam.name
+				p.Fluting = fam.fluting
+			} else {
+				p.Name = m[1]
+			}
+			p.Grammage, _ = strconv.ParseFloat(m[2], 64)
+		}
+		sr.papers = append(sr.papers, p)
+	}
+	prows.Close()
+
+	count := 0
+	for code, sr := range structs {
+		total := 0.0
+		for _, p := range sr.papers {
+			total += p.Grammage * p.Qty
+		}
+		papersJSON, _ := json.Marshal(sr.papers)
+		_, err := db.Exec(`
+			INSERT INTO board_structures (code, description, tip_carton, flute, color, papers, total_grammage, synced_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+			ON CONFLICT (code) DO UPDATE SET
+				description = EXCLUDED.description,
+				tip_carton = EXCLUDED.tip_carton,
+				flute = EXCLUDED.flute,
+				color = EXCLUDED.color,
+				papers = EXCLUDED.papers,
+				total_grammage = EXCLUDED.total_grammage,
+				synced_at = NOW()`,
+			code, sr.desc, sr.tip, strings.TrimSpace(sr.flute), strings.TrimSpace(sr.color), papersJSON, total)
+		if err == nil {
+			count++
+		} else {
+			log.Printf("structures sync: upsert %s failed: %v", code, err)
+		}
+	}
+	log.Printf("structures sync: %d board structures replicated from DWH", count)
+}
+
+func handleGetStructures(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if _, ok := authorize(w, r); !ok {
+		return
+	}
+	if db == nil {
+		http.Error(w, "Database unavailable", http.StatusInternalServerError)
+		return
+	}
+	rows, err := db.Query(`
+		SELECT code, COALESCE(description,''), COALESCE(tip_carton,''), COALESCE(flute,''),
+		       COALESCE(color,''), COALESCE(papers::text,'[]'), COALESCE(total_grammage,0)
+		FROM board_structures
+		ORDER BY flute, total_grammage, code`)
+	if err != nil {
+		http.Error(w, "Query failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	type outRow struct {
+		Code          string          `json:"code"`
+		Description   string          `json:"description"`
+		TipCarton     string          `json:"tip_carton"`
+		Flute         string          `json:"flute"`
+		Color         string          `json:"color"`
+		Papers        json.RawMessage `json:"papers"`
+		TotalGrammage float64         `json:"total_grammage"`
+	}
+	out := []outRow{}
+	for rows.Next() {
+		var o outRow
+		var papers string
+		if err := rows.Scan(&o.Code, &o.Description, &o.TipCarton, &o.Flute, &o.Color, &papers, &o.TotalGrammage); err == nil {
+			o.Papers = json.RawMessage(papers)
+			out = append(out, o)
+		}
+	}
+	json.NewEncoder(w).Encode(out)
 }
 
 func handleGetProducts(w http.ResponseWriter, r *http.Request) {

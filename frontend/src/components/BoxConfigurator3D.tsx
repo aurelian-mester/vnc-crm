@@ -37,6 +37,7 @@ const CameraRig: React.FC<{ fitRadius: number; controlsRef: React.MutableRefObje
 // ---------------------------------------------------------------------------
 interface MaterialPalette { base: string; dark: string; fiber: string; lightFiber: string; stripe: string; }
 const palette = (material: string): MaterialPalette => {
+  if (material === 'ALB') return { base: '#eeebe2', dark: '#d9d4c6', fiber: 'rgba(120,108,86,0.10)', lightFiber: 'rgba(255,255,255,0.4)', stripe: 'rgba(110,98,76,0.04)' }; // white-top board
   if (material === 'Schrenz') return { base: '#a9a9a7', dark: '#8d8d8b', fiber: 'rgba(45,45,45,0.20)', lightFiber: 'rgba(235,235,235,0.25)', stripe: 'rgba(40,40,40,0.05)' };
   if (material === 'Wellenstoff') return { base: '#c29a6e', dark: '#a37e54', fiber: 'rgba(70,44,22,0.22)', lightFiber: 'rgba(255,250,240,0.16)', stripe: 'rgba(64,40,18,0.06)' };
   return { base: '#d3aa7c', dark: '#b78e5f', fiber: 'rgba(92,61,37,0.18)', lightFiber: 'rgba(255,252,245,0.15)', stripe: 'rgba(74,46,22,0.05)' }; // Testliner
@@ -1082,6 +1083,7 @@ interface BoxConfigProps {
   foldPercent?: number;
   fefcoCode?: string; // 02xx slotted, 03xx telescope, 04xx folder/tray, 0501, 0601, 0711, 0933
   lidMaterial?: string; // separate board grade for the lid/sleeve of two-piece styles
+  boardColor?: string; // DWH structure colour: 'NATUR NATUR' | 'ALB NATUR' | 'ALB ALB'
   printColor?: string;
   printText?: string;
   hasRecycling?: boolean;
@@ -1104,6 +1106,7 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   foldPercent = 1.0,
   fefcoCode = '201',
   lidMaterial = '',
+  boardColor = '',
   printColor = '#1a365d',
   printText = 'VRANCART',
   hasRecycling = false,
@@ -1124,8 +1127,11 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   }, [logoUrl]);
 
   const L = length, W = width, H = height;
+  // The DWH structure colour overrides the kraft tint: ALB* boards render
+  // with the white-top palette so the colour choice is visible instantly.
+  const effMaterial = (boardColor || '').trim().startsWith('ALB') ? 'ALB' : material;
   const tex = useCardboardTextures(
-    material, dieCutting, printColor, printText,
+    effMaterial, dieCutting, printColor, printText,
     hasRecycling, hasFragile, hasUpArrows, logoImage,
     printing ? L / H : 1, printing ? W / H : 1
   );
