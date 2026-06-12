@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import BoxConfigurator3D from '../components/BoxConfigurator3D';
 import { parseJWT } from '../App';
 import { useI18n } from '../i18n';
-import { planPallets, planToHandoffItems, pushHandoff, DEFAULT_PALLET, PalletConstraints } from '../boxLogistics';
+import { planPallets, planToHandoffItems, pushHandoff, caliperForFlute, DEFAULT_PALLET, PalletConstraints } from '../boxLogistics';
 import { buildDielineSVG } from '../dieline';
 import { BoardStructure, BoardStructurePicker, BoardCrossSection } from '../components/BoardStructurePicker';
 
@@ -93,6 +93,7 @@ const ProductConfigurator: React.FC = () => {
     fefco_code: '201',
     lid_material: '', // '' = same board as the body; only used by two-piece styles
     structure_code: '', // DWH board structure (CO.STRUCTURI); drives flute/material
+    dim_reference: 'exterior', // 'exterior' | 'interior' — what L/W/H refer to
     flute_type: 'B',
     tooling_printing_plates_cost: 0,
     tooling_die_cut_molds_cost: 0,
@@ -106,6 +107,24 @@ const ProductConfigurator: React.FC = () => {
   const effectiveLidMaterial = TWO_PIECE_STYLES.includes(params.fefco_code)
     ? (params.lid_material || params.material)
     : '';
+
+  // Interior → exterior dimension conversion. The blank (placa) and the die
+  // shape are always manufactured from EXTERIOR dimensions; when the user
+  // specifies interior ones we add the board thickness of the selected
+  // structure: one wall on each side for L/W, and the flap layers for H
+  // (2 top + 2 bottom on closing styles, bottom-only on open trays, bottom
+  // + lid panel on telescopes). Fitments have no interior/exterior notion.
+  const NO_DIM_CONVERT = ['901', '904', '933'];
+  const OPEN_TOP_STYLES = ['200', '421'];
+  const boardThickness = caliperForFlute(params.flute_type); // mm
+  const dimsAreInterior = params.dim_reference === 'interior' && !NO_DIM_CONVERT.includes(params.fefco_code);
+  const heightAllowance = OPEN_TOP_STYLES.includes(params.fefco_code) ? 2
+    : TWO_PIECE_STYLES.includes(params.fefco_code) && params.fefco_code !== '501' && params.fefco_code !== '601' ? 3
+    : 4;
+  const r1 = (v: number) => Math.round(v * 10) / 10;
+  const extDims = dimsAreInterior
+    ? { length: r1(params.length + 2 * boardThickness), width: r1(params.width + 2 * boardThickness), height: r1(params.height + heightAllowance * boardThickness) }
+    : { length: params.length, width: params.width, height: params.height };
 
   const [result, setResult] = useState<PricingResult | null>(null);
 
@@ -183,7 +202,7 @@ const ProductConfigurator: React.FC = () => {
     }
 
     const titleText = locale === 'ro' ? 'Fișă Tehnică Produs - Vrancart Packaging' : 'Product Technical Spec Sheet - Vrancart Packaging';
-    const dieline = buildDielineSVG({ length: params.length, width: params.width, height: params.height, fefco: params.fefco_code, locale });
+    const dieline = buildDielineSVG({ length: extDims.length, width: extDims.width, height: extDims.height, fefco: params.fefco_code, locale });
 
     printWindow.document.write(`
       <html>
@@ -358,9 +377,14 @@ const ProductConfigurator: React.FC = () => {
                 <span class="spec-val">FEFCO ${params.fefco_code}</span>
               </div>
               <div class="spec-row">
-                <span class="spec-label">${locale === 'ro' ? 'Dimensiuni (LxLxÎ)' : 'Dimensions (LxWxH)'}:</span>
-                <span class="spec-val">${params.length} x ${params.width} x ${params.height} mm</span>
+                <span class="spec-label">${locale === 'ro' ? 'Dimensiuni Exterioare (LxLxÎ)' : 'External Dimensions (LxWxH)'}:</span>
+                <span class="spec-val">${extDims.length} x ${extDims.width} x ${extDims.height} mm</span>
               </div>
+              ${dimsAreInterior ? `
+              <div class="spec-row">
+                <span class="spec-label">${locale === 'ro' ? 'Dimensiuni Interioare (cerute)' : 'Internal Dimensions (requested)'}:</span>
+                <span class="spec-val">${params.length} x ${params.width} x ${params.height} mm (t=${boardThickness} mm)</span>
+              </div>` : ''}
               <div class="spec-row">
                 <span class="spec-label">${locale === 'ro' ? 'Compoziție Material' : 'Material Grade'}:</span>
                 <span class="spec-val">${params.material}</span>
@@ -507,7 +531,7 @@ const ProductConfigurator: React.FC = () => {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ ...params, lid_material: effectiveLidMaterial, target_margin: targetMargin })
+      body: JSON.stringify({ ...params, ...extDims, lid_material: effectiveLidMaterial, target_margin: targetMargin })
     })
     .then(res => { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
     .then(data => setResult(data))
@@ -524,9 +548,9 @@ const ProductConfigurator: React.FC = () => {
         'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
-        length: params.length,
-        width: params.width,
-        height: params.height,
+        length: extDims.length,
+        width: extDims.width,
+        height: extDims.height,
         quantity: params.quantity,
         material: params.material,
         fluteType: params.flute_type,
@@ -719,9 +743,9 @@ const ProductConfigurator: React.FC = () => {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({
           fefco_code: params.fefco_code,
-          length: params.length,
-          width: params.width,
-          height: params.height,
+          length: extDims.length,
+          width: extDims.width,
+          height: extDims.height,
           material: params.material,
           flute_type: params.flute_type,
           lid_material: effectiveLidMaterial
@@ -743,13 +767,17 @@ const ProductConfigurator: React.FC = () => {
 
       return {
         product_id: customProductId,
-        description: `Custom Box FEFCO ${params.fefco_code} (${params.length}x${params.width}x${params.height} mm) ${params.structure_code || params.material}${effectiveLidMaterial && effectiveLidMaterial !== params.material ? ` / ${locale === 'ro' ? 'capac' : 'lid'} ${effectiveLidMaterial}` : ''}`,
+        description: `Custom Box FEFCO ${params.fefco_code} (${extDims.length}x${extDims.width}x${extDims.height} mm ext${dimsAreInterior ? `, int ${params.length}x${params.width}x${params.height}` : ''}) ${params.structure_code || params.material}${effectiveLidMaterial && effectiveLidMaterial !== params.material ? ` / ${locale === 'ro' ? 'capac' : 'lid'} ${effectiveLidMaterial}` : ''}`,
         quantity: qty,
         unit_price: price,
         config_params: JSON.stringify({
-          length: params.length,
-          width: params.width,
-          height: params.height,
+          // length/width/height are always the EXTERIOR (manufacturing) dims;
+          // the requested interior ones are kept alongside when applicable.
+          length: extDims.length,
+          width: extDims.width,
+          height: extDims.height,
+          dim_reference: params.dim_reference,
+          ...(dimsAreInterior ? { interior_length: params.length, interior_width: params.width, interior_height: params.height, board_thickness: boardThickness } : {}),
           material: params.material,
           lid_material: effectiveLidMaterial,
           structure_code: params.structure_code,
@@ -840,10 +868,10 @@ const ProductConfigurator: React.FC = () => {
           {activeTab === '3d' && (
             <div>
               <div style={{ height: '500px', border: '1px solid #eee', borderRadius: '8px', overflow: 'hidden', background: '#fcfcfc' }}>
-                <BoxConfigurator3D 
-                  length={params.length / 100} 
-                  width={params.width / 100} 
-                  height={params.height / 100} 
+                <BoxConfigurator3D
+                  length={extDims.length / 100}
+                  width={extDims.width / 100}
+                  height={extDims.height / 100}
                   material={params.material}
                   printing={params.printing}
                   dieCutting={params.dieCutting}
@@ -1658,6 +1686,29 @@ const ProductConfigurator: React.FC = () => {
         <div style={{ width: '380px', padding: '25px', backgroundColor: '#fafafa', borderRadius: '8px' }}>
           <h4 style={{ marginTop: 0, marginBottom: '20px' }}>{t('configuration_parameters')}</h4>
           
+          {/* Interior / exterior dimension reference */}
+          {!NO_DIM_CONVERT.includes(params.fefco_code) && (
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              {(['exterior', 'interior'] as const).map(refMode => (
+                <button
+                  key={refMode}
+                  type="button"
+                  onClick={() => setParams({ ...params, dim_reference: refMode })}
+                  style={{
+                    flex: 1, padding: '7px 10px', fontSize: '0.8rem', fontWeight: 'bold',
+                    border: '1px solid #8a6d3b', borderRadius: '4px', cursor: 'pointer',
+                    backgroundColor: params.dim_reference === refMode ? '#8a6d3b' : '#fcf8e3',
+                    color: params.dim_reference === refMode ? 'white' : '#8a6d3b',
+                  }}
+                >
+                  {refMode === 'exterior'
+                    ? (locale === 'ro' ? '📏 Dim. Exterioare' : '📏 External dims')
+                    : (locale === 'ro' ? '📐 Dim. Interioare' : '📐 Internal dims')}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
             <div>
               <label style={{ fontSize: '0.8rem', color: '#666' }}>{t('length_mm')}</label>
@@ -1668,11 +1719,19 @@ const ProductConfigurator: React.FC = () => {
               <input type="number" value={params.width} onChange={e => setParams({...params, width: Number(e.target.value)})} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
             </div>
           </div>
-          
+
           <div style={{ marginTop: '15px' }}>
             <label style={{ fontSize: '0.8rem', color: '#666' }}>{t('height_mm')}</label>
             <input type="number" value={params.height} onChange={e => setParams({...params, height: Number(e.target.value)})} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
           </div>
+
+          {dimsAreInterior && (
+            <div style={{ marginTop: '8px', padding: '8px 10px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '6px', fontSize: '0.76rem', color: '#1e40af', lineHeight: 1.5 }}>
+              {locale === 'ro'
+                ? <>Placa și forma se calculează pe <strong>exterior: {extDims.length} × {extDims.width} × {extDims.height} mm</strong> (grosime structură t = {boardThickness} mm: L/l +2t, H +{heightAllowance}t)</>
+                : <>Blank and die are computed on <strong>external: {extDims.length} × {extDims.width} × {extDims.height} mm</strong> (board thickness t = {boardThickness} mm: L/W +2t, H +{heightAllowance}t)</>}
+            </div>
+          )}
 
           <div style={{ marginTop: '15px' }}>
             <label style={{ fontSize: '0.8rem', color: '#666' }}>{t('quantity')}</label>
@@ -2204,7 +2263,7 @@ const ProductConfigurator: React.FC = () => {
           maxStackMm: shipMaxStack,
         };
         const boxSpec = {
-          lengthMm: params.length, widthMm: params.width, heightMm: params.height,
+          lengthMm: extDims.length, widthMm: extDims.width, heightMm: extDims.height,
           fefco: params.fefco_code, fluteType: params.flute_type, quantity: params.quantity,
           grammage: specs?.grammage, caliperMm: specs?.caliper,
         };
