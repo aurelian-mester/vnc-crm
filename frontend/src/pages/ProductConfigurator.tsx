@@ -3,6 +3,7 @@ import BoxConfigurator3D from '../components/BoxConfigurator3D';
 import { parseJWT } from '../App';
 import { useI18n } from '../i18n';
 import { planPallets, planToHandoffItems, pushHandoff, DEFAULT_PALLET, PalletConstraints } from '../boxLogistics';
+import { buildDielineSVG } from '../dieline';
 
 interface PriceTier {
   quantity: number;
@@ -166,7 +167,8 @@ const ProductConfigurator: React.FC = () => {
     }
 
     const titleText = locale === 'ro' ? 'Fișă Tehnică Produs - Vrancart Packaging' : 'Product Technical Spec Sheet - Vrancart Packaging';
-    
+    const dieline = buildDielineSVG({ length: params.length, width: params.width, height: params.height, fefco: params.fefco_code, locale });
+
     printWindow.document.write(`
       <html>
         <head>
@@ -228,6 +230,25 @@ const ProductConfigurator: React.FC = () => {
               max-height: 100%;
               object-fit: contain;
             }
+            .dieline-card {
+              border: 1px solid #e2e8f0;
+              border-radius: 8px;
+              padding: 16px;
+              margin-bottom: 30px;
+              page-break-inside: avoid;
+            }
+            .dieline-card h2 {
+              font-size: 15px;
+              color: #1a365d;
+              margin: 0 0 8px 0;
+            }
+            .dieline-note { font-size: 11px; color: #b45309; font-weight: normal; margin-left: 8px; }
+            .dieline-legend { display: flex; gap: 18px; font-size: 11px; color: #475569; margin-bottom: 10px; }
+            .dieline-legend i { display: inline-block; width: 28px; height: 0; vertical-align: middle; margin-right: 5px; }
+            .lg-cut { border-top: 2px solid #1a202c; }
+            .lg-crease { border-top: 2px dashed #2563eb; }
+            .lg-perf { border-top: 2px dashed #dc2626; }
+            .dieline-card svg { max-height: 480px; }
             .specs-card {
               border: 1px solid #e2e8f0;
               border-radius: 8px;
@@ -373,6 +394,18 @@ const ProductConfigurator: React.FC = () => {
                 </div>
               ` : ''}
             </div>
+          </div>
+
+          <div class="dieline-card">
+            <h2>${locale === 'ro' ? 'Desen Ștanță / Desfășurată Cotată' : 'Die-Line / Dimensioned Flat Pattern'}
+              ${dieline.exact ? '' : `<span class="dieline-note">${locale === 'ro' ? '(desen orientativ)' : '(indicative drawing)'}</span>`}
+            </h2>
+            <div class="dieline-legend">
+              <span><i class="lg-cut"></i> ${locale === 'ro' ? 'Tăiere' : 'Cut'}</span>
+              <span><i class="lg-crease"></i> ${locale === 'ro' ? 'Big / Pliere' : 'Crease / Fold'}</span>
+              <span><i class="lg-perf"></i> ${locale === 'ro' ? 'Perforație' : 'Perforation'}</span>
+            </div>
+            ${dieline.svg}
           </div>
 
           ${specs ? `
