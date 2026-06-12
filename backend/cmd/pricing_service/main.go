@@ -422,10 +422,15 @@ func calculatePricingDetails(req CalculationRequest, q int) (materialPrice, setu
 
 	// Surface Area in square meters (approx for a box: 2*(L*W + L*H + W*H))
 	surfaceArea := 2 * (req.Length*req.Width + req.Length*req.Height + req.Width*req.Height) / 1000000.0
-	// A partition insert (FEFCO 0933) has no walls — its board is just the
-	// crossed strips (2 longitudinal + 3 transverse, matching the 3D model).
-	if strings.TrimPrefix(strings.TrimSpace(req.FefcoCode), "0") == "933" {
+	// Flat fitments don't follow the box-surface formula: their board is the
+	// actual die-cut area (matching the 3D models).
+	switch strings.TrimPrefix(strings.TrimSpace(req.FefcoCode), "0") {
+	case "933": // partition insert: 2 longitudinal + 3 transverse strips
 		surfaceArea = (2*req.Length*req.Height + 3*req.Width*req.Height) / 1000000.0
+	case "901": // layer pad: a single flat sheet
+		surfaceArea = (req.Length * req.Width) / 1000000.0
+	case "904": // U-profile protective fitment: base + two legs
+		surfaceArea = (req.Length * (req.Width + 2*req.Height)) / 1000000.0
 	}
 
 	materialPricePerSQM := resolveBoardRate(req.Material, req.CustomerID, req.CustomerPriceGroup, q)

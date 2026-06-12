@@ -523,7 +523,7 @@ interface OnePieceProps {
   printCoverageSide: boolean;
 }
 
-const MailerBox: React.FC<OnePieceProps & { withLid?: boolean }> = ({ L, W, H, p, tex, printCoverageSide, withLid = true }) => {
+const MailerBox: React.FC<OnePieceProps & { withLid?: boolean; skirts?: boolean }> = ({ L, W, H, p, tex, printCoverageSide, withLid = true, skirts = true }) => {
   const fSide = stage(p, 0, 0.28);
   const fTab = stage(p, 0.28, 0.44);
   const fFB = stage(p, 0.44, 0.6);
@@ -580,8 +580,9 @@ const MailerBox: React.FC<OnePieceProps & { withLid?: boolean }> = ({ L, W, H, p
           <group position={[0, H / 2 + 0.012 * fLid, 0]} rotation={[HALF_PI * fLid, 0, 0]}>
             <group position={[0, lidDepth / 2, 0]}>
               <Panel w={lidWidth} h={lidDepth} tex={tex} face="plain" flute="h" />
-              {/* side skirts fold down outside the side walls */}
-              {[1, -1].map(s => (
+              {/* side skirts fold down outside the side walls (0427 only —
+                  the 0426 pizza lid closes with the front tuck alone) */}
+              {skirts && [1, -1].map(s => (
                 <group key={'sk' + s} position={[s * lidWidth / 2, 0, 0]} rotation={[0, -s * HALF_PI * fTuck, 0]}>
                   <group position={[s * skirtD / 2, 0, 0]}>
                     <Panel w={skirtD} h={lidDepth - 0.15} tex={tex} face="plain" flute="h" />
@@ -733,6 +734,126 @@ const SleeveBox: React.FC<OnePieceProps & { lidTex: TexSet }> = ({ L, W, H, p, t
           </group>
         ))}
       </group>
+    </group>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// FEFCO 0901 layer pad: a single flat die-cut sheet (L x W). Nothing folds;
+// the slider gently fans a small stack so it reads as a product, not a bug.
+// ---------------------------------------------------------------------------
+const PadSheet: React.FC<{ L: number; W: number; H: number; p: number; tex: TexSet }> = ({ L, W, H, p, tex }) => {
+  const fan = stage(p, 0.3, 1);
+  const baseY = -H / 2;
+  return (
+    <group position={[0, baseY, 0]}>
+      {[0, 1, 2].map(i => (
+        <group key={'pad' + i} position={[i * 0.18 * fan, T / 2 + i * (T + 0.004), -i * 0.14 * fan]} rotation={[HALF_PI, 0, i * 0.05 * fan]}>
+          <Panel w={L} h={W} tex={tex} face={i === 2 ? 'front' : 'plain'} flute="h" />
+        </group>
+      ))}
+    </group>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// FEFCO 0904 U-profile protective fitment: a base strip with two legs that
+// fold up along the length (edge/part protection).
+// ---------------------------------------------------------------------------
+const UProfile: React.FC<{ L: number; W: number; H: number; p: number; tex: TexSet }> = ({ L, W, H, p, tex }) => {
+  const fLegs = stage(p, 0.15, 0.85);
+  const baseY = -H / 2 + T / 2;
+  return (
+    <group position={[0, baseY, 0]}>
+      <group rotation={[HALF_PI, 0, 0]}>
+        <Panel w={L} h={W} tex={tex} face="plain" flute="h" />
+      </group>
+      {[1, -1].map(zs => (
+        <group key={'leg' + zs} position={[0, 0, zs * W / 2]} rotation={[zs * HALF_PI * (1 - fLegs), 0, 0]}>
+          <group position={[0, H / 2, 0]}>
+            <Panel w={L} h={H} tex={tex} face={zs === 1 ? 'front' : 'plain'} flute="v" />
+          </group>
+        </group>
+      ))}
+    </group>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// FEFCO 0800-series shelf-ready (SRP) transit box: walls carry a perforation
+// line; after the box closes, the upper sections tear along it and swing
+// open outward, leaving a display tray.
+// ---------------------------------------------------------------------------
+const SrpBox: React.FC<OnePieceProps & { printCoverageBack: boolean }> = ({ L, W, H, p, tex, printCoverageSide, printCoverageBack }) => {
+  const fWall = stage(p, 0, 0.45);
+  const fTop = stage(p, 0.45, 0.7);
+  const fTear = stage(p, 0.75, 1);
+  const lowH = H * 0.58;
+  const upH = H - lowH;
+  const topD = W / 2 - GAP;
+  const baseY = -H / 2 + T / 2;
+  const tearAngle = HALF_PI * 1.15 * fTear; // petals flop outward past 90°
+  // While tearing, the closed top halves unfold back in line with their
+  // petals, so the removed sections hang outside as flat straps instead of
+  // big wings — closer to how an opened SRP actually looks.
+  const topAngle = HALF_PI * fTop * (1 - fTear);
+
+  const perfDashes = (width: number) => (
+    <group>
+      {Array.from({ length: 9 }).map((_, i) => (
+        <mesh key={'pf' + i} position={[-width / 2 + ((i + 0.5) / 9) * width, 0, 0]}>
+          <boxGeometry args={[width / 22, 0.016, T + 0.006]} />
+          <meshStandardMaterial color="#6b4f2f" roughness={0.8} />
+        </mesh>
+      ))}
+    </group>
+  );
+
+  // One wall: lower segment + perforation + upper segment (with optional top
+  // half-flap). `axis` selects the hinge orientation (front/back vs sides).
+  const wall = (dir: 1 | -1, side: boolean) => {
+    const wWidth = side ? W - 2 * SLOT : L;
+    const face = side ? (printCoverageSide ? 'side' : 'plain') : (dir === 1 ? 'front' : (printCoverageBack ? 'front' : 'plain'));
+    const hingePos: [number, number, number] = side ? [dir * L / 2, 0, 0] : [0, 0, dir * W / 2];
+    const hingeRot: [number, number, number] = side ? [0, 0, dir * -HALF_PI * (1 - fWall)] : [dir * HALF_PI * (1 - fWall), 0, 0];
+    // In every wall's local frame the perforation hinge runs along local X
+    // and "outward" is +Z for dir=1 / -Z for dir=-1 (the side walls' wrapper
+    // rotation maps local Z onto world X), so one formula covers all four.
+    const tearRot: [number, number, number] = [dir * tearAngle, 0, 0];
+    const inner = (
+      <group position={[0, lowH / 2, 0]}>
+        <Panel w={wWidth} h={lowH} tex={tex} face={face} flute="v" />
+        <group position={[0, lowH / 2, 0]}>
+          {perfDashes(wWidth)}
+          <group rotation={tearRot}>
+            <group position={[0, upH / 2, 0]}>
+              <Panel w={wWidth} h={upH} tex={tex} face="plain" flute="v" />
+              {!side && (
+                <group position={[0, upH / 2, 0]} rotation={[-dir * topAngle, 0, 0]}>
+                  <group position={[0, topD / 2, 0]}>
+                    <Panel w={L - 2 * SLOT} h={topD} tex={tex} face="plain" flute="h" />
+                  </group>
+                </group>
+              )}
+            </group>
+          </group>
+        </group>
+      </group>
+    );
+    return side
+      ? <group key={'sw' + dir} position={hingePos} rotation={hingeRot}><group rotation={[0, HALF_PI, 0]}>{inner}</group></group>
+      : <group key={'fw' + dir} position={hingePos} rotation={hingeRot}>{inner}</group>;
+  };
+
+  return (
+    <group position={[0, baseY, 0]}>
+      <group rotation={[HALF_PI, 0, 0]}>
+        <Panel w={L} h={W} tex={tex} face="plain" flute="h" />
+      </group>
+      {wall(1, false)}
+      {wall(-1, false)}
+      {wall(1, true)}
+      {wall(-1, true)}
     </group>
   );
 };
@@ -1031,7 +1152,7 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
   const p = Math.min(1, Math.max(0, numericFold));
 
   const style = fefcoCode || '201';
-  const bottomAnchored = ['427', '410', '421', '501', '401', '601', '933'].includes(style);
+  const bottomAnchored = ['427', '426', '410', '421', '501', '401', '601', '933', '901', '904', '800'].includes(style);
   const isScope = style === '300' || style === '301' || style === '302';
 
   const fW = stage(p, 0, 0.5);
@@ -1077,7 +1198,11 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
         ? Math.max(L + 2 * H + 2.4, W + 2 * H + 1) // body cross + end panels lying beside
         : style === '933'
           ? Math.max(L + 3 * H + 2.5, W + 2 * H + 1.5) // strips spread out flat
-          : Math.max(L + 2 * H + 2, 2 * W + 3 * H + 1))
+          : style === '901'
+            ? Math.max(L, W) + 2
+            : style === '904'
+              ? Math.max(L, W + 2 * H) + 2
+              : Math.max(L + 2 * H + 2, 2 * W + 3 * H + 1))
     : style === '711'
       ? Math.max(L + W + 1, H + 2 * W * 0.62 + 1) // flat-folded glued stack
       : Math.max(2 * L + 2 * W + 1.2, H + 2 * majDFit + 0.5) + (isScope ? (W + 2) : 0);
@@ -1092,7 +1217,13 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
         ? Math.max(L + 2.2, W, H) + 0.5 // end panels approach from both sides
         : style === '933'
           ? Math.max(L, W, 2.8 * H) + 0.8 // transverse strips hover before dropping
-          : Math.max(L, W, H + W * 0.8) + 1.2)
+          : style === '901'
+            ? Math.max(L, W) + 1
+            : style === '904'
+              ? Math.max(L, W, H) + 1
+              : style === '800'
+                ? Math.max(L, W) + H + 1 // torn-open petals extend outward
+                : Math.max(L, W, H + W * 0.8) + 1.2)
     : Math.max(L, W, H / 2 + topOpenFit + depthBelow) + (isScope ? 1.5 : 0);
   // The 0501 sleeve only reaches the tray late in the fold, so its camera
   // blend follows the sleeve's travel instead of the wall stage.
@@ -1121,6 +1252,12 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
 
   const assembly = (foldP: number) => {
     if (style === '427') return <MailerBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} />;
+    // 0426 pizza box: same one-piece hinged-lid family, lid closes with the
+    // front tuck alone (no side skirts).
+    if (style === '426') return <MailerBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} skirts={false} />;
+    if (style === '901') return <PadSheet L={L} W={W} H={H} p={foldP} tex={texForBox} />;
+    if (style === '904') return <UProfile L={L} W={W} H={H} p={foldP} tex={texForBox} />;
+    if (style === '800') return <SrpBox L={L} W={W} H={H} p={foldP} tex={texForBox} printCoverageSide={coverSide} printCoverageBack={coverBack} />;
     // 0421 is the mailer's tray without a lid: its walls and corner tabs
     // span the full slider range.
     if (style === '421') return <MailerBox L={L} W={W} H={H} p={foldP * 0.6} tex={texForBox} printCoverageSide={coverSide} withLid={false} />;
@@ -1190,7 +1327,9 @@ const BoxConfigurator3D: React.FC<BoxConfigProps> = ({
         {p >= 0.5 && (
           <group position={viewMode === 'flat-box' ? [L / 2 + 0.5, 0, 0] : [0, 0, 0]}>
             <DimensionOverlay start={[-L / 2, -H / 2, W / 2]} end={[L / 2, -H / 2, W / 2]} label={`${Math.round(L * 100)} mm`} offset={-0.6} dir="x" />
-            <DimensionOverlay start={[-L / 2, -H / 2, W / 2]} end={[-L / 2, H / 2, W / 2]} label={`${Math.round(H * 100)} mm`} offset={-0.6} dir="y" />
+            {style !== '901' && (
+              <DimensionOverlay start={[-L / 2, -H / 2, W / 2]} end={[-L / 2, H / 2, W / 2]} label={`${Math.round(H * 100)} mm`} offset={-0.6} dir="y" />
+            )}
             <DimensionOverlay start={[L / 2, -H / 2, W / 2]} end={[L / 2, -H / 2, -W / 2]} label={`${Math.round(W * 100)} mm`} offset={0.6} dir="z" />
           </group>
         )}

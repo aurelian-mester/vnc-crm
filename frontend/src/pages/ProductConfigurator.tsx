@@ -1621,12 +1621,16 @@ const ProductConfigurator: React.FC = () => {
               <option value="301">FEFCO 301 (Partial Telescope Box)</option>
               <option value="302">FEFCO 302 (Full Telescope, Equal Halves)</option>
               <option value="401">FEFCO 401 (One-Piece Book Wrap)</option>
+              <option value="426">FEFCO 426 (Pizza Box, Hinged Lid)</option>
               <option value="427">FEFCO 427 (Die-Cut Mailer)</option>
               <option value="410">FEFCO 410 (Wrap-Around Folder)</option>
               <option value="421">FEFCO 421 (Die-Cut Four-Corner Tray)</option>
               <option value="501">FEFCO 501 (Slide Box: Sleeve & Tray)</option>
               <option value="601">FEFCO 601 (Bliss Box: Body + End Panels)</option>
               <option value="711">FEFCO 711 (Crash-Lock Bottom)</option>
+              <option value="800">FEFCO 800 (Shelf-Ready / SRP, 08xx series)</option>
+              <option value="901">FEFCO 901 (Layer Pad / Flat Sheet)</option>
+              <option value="904">FEFCO 904 (U-Profile Protector)</option>
               <option value="933">FEFCO 933 (Partition / Divider Insert)</option>
             </select>
           </div>
